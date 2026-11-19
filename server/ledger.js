@@ -741,6 +741,72 @@ export function validateChain(blocks, options = {}) {
   return result;
 }
 
+// Startup against Turso can fail while a hibernating database wakes up. Those
+// failures are transport-level and must be retried with a fresh client, because
+// a client that has already lost its socket cannot be reused. Permanent errors
+// (bad checkpoint, invalid configuration, unsupported data) fail immediately.
+const STARTUP_RETRY_BASES_MS = [2_000, 3_000, 5_000, 8_000];
+const STARTUP_TRANSIENT_PATTERN = /UND_ERR_SOCKET|fetch failed|other side closed|socket hang up|ECONNRESET|ECONNREFUSED|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|EHOSTUNREACH|ENETUNREACH|network|timeout|temporarily unavailable|database is locked|database is busy/i;
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+export function isTransientStartupError(error) {
+  const text = `${error?.name || ''} ${error?.code || ''} ${error?.message || error || ''}`;
+  return STARTUP_TRANSIENT_PATTERN.test(text);
+}
+
+// Fibonacci-like backoff: 2s, 3s, 5s, 8s, then 10s cap. Jitter prevents a fleet
+// of restarting nodes from waking the database in a synchronized thundering herd.
+export function startupRetryDelayMs(attempt, maxDelayMs = 10_000) {
+  const index = Math.max(0, Math.min(STARTUP_RETRY_BASES_MS.length - 1, attempt - 1));
+  const base = Math.min(STARTUP_RETRY_BASES_MS[index] ?? 10_000, maxDelayMs);
+  const jitterWindow = Math.min(1_000, Math.max(1, Math.floor(base * 0.2)));
+  return base + Math.floor(Math.random() * jitterWindow);
+}
+
+/**
+ * Creates and validates a ledger with fresh clients on every attempt. A failed
+ * candidate is closed before the next attempt so no half-open socket survives.
+ * The returned ledger has already passed the startup integrity check.
+ */
+export async function createLedgerWithRetry(
+  databasePath = 'blackcoin.db',
+  options = {},
+  {
+    attempts = 10,
+    maxDelayMs = 10_000,
+    label = 'Ledger initialization',
+    onRetry = null
+  } = {}
+) {
+  let lastError;
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    let candidate = null;
+    try {
+      candidate = await createLedger(databasePath, options);
+      const integrity = await candidate.validateStoredChain();
+      if (integrity?.valid === false) {
+        console.error(`Stored chain integrity issue on startup: ${integrity.error}`);
+      }
+      return candidate;
+    } catch (error) {
+      lastError = error;
+      if (candidate) {
+        try { candidate.close(); } catch { /* already closed */ }
+      }
+      if (!isTransientStartupError(error) || attempt >= attempts) throw error;
+      const waitMs = startupRetryDelayMs(attempt, maxDelayMs);
+      const detail = { attempt, attempts, delayMs: waitMs, error };
+      if (typeof onRetry === 'function') onRetry(detail);
+      else console.warn(`${label} failed (attempt ${attempt}/${attempts}): ${error?.message || error}. Retrying in ${waitMs}ms...`);
+      await delay(waitMs);
+    }
+  }
+  throw lastError;
+}
+
 export async function createLedger(databasePath = 'blackcoin.db', options = {}) {
   // Consensus switches are read once at construction. A running process never
   // changes era mid-flight. Q-1 is resolved: the compiled default is height

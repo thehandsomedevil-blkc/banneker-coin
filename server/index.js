@@ -2,7 +2,7 @@ import express from 'express';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
-  createLedger,
+  createLedgerWithRetry,
   MAX_SUPPLY,
   COIN,
   HALVING_INTERVAL,
@@ -87,35 +87,35 @@ function parsePageHeight(value, name) {
   return height;
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
+// The port is bound before any database work begins. Until this resolves,
+// /health and /api requests receive 503 INITIALIZING instead of taking the
+// process down with an unhandled Turso socket error.
+let ledger = null;
+let ledgerInitError = null;
+let shuttingDown = false;
 
-async function withRetry(fn, { attempts = 3, baseDelayMs = 1000, label = 'operation' } = {}) {
-  let lastError;
-  for (let attempt = 1; attempt <= attempts; attempt += 1) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      if (attempt >= attempts) break;
-      const delay = baseDelayMs * attempt;
-      console.warn(`${label} failed (attempt ${attempt}/${attempts}): ${error?.message || error}. Retrying in ${delay}ms...`);
-      await sleep(delay);
+async function initializeLedger() {
+  try {
+    ledger = await createLedgerWithRetry(dbPath, {}, {
+      attempts: 10,
+      maxDelayMs: 10_000,
+      label: 'Ledger initialization',
+      onRetry: ({ attempt, attempts, delayMs, error }) => {
+        console.warn(`Ledger initialization failed (attempt ${attempt}/${attempts}): ${error?.message || error}. Retrying in ${delayMs}ms...`);
+      }
+    });
+    ledgerInitError = null;
+    if (shuttingDown) {
+      ledger.close();
+      ledger = null;
+      return;
     }
+    console.log('Ledger initialized.');
+    await startPeerSync();
+  } catch (error) {
+    ledgerInitError = error;
+    console.error(`Ledger initialization failed permanently: ${error?.message || error}`);
   }
-  throw lastError;
-}
-
-// Async initialization with retry for transient Turso/socket failures
-const ledger = await withRetry(() => createLedger(dbPath), { attempts: 3, baseDelayMs: 1500, label: 'Ledger initialization' });
-try {
-  const startupIntegrity = await withRetry(() => ledger.validateStoredChain(), { attempts: 3, baseDelayMs: 1000, label: 'Startup chain validation' });
-  if (!startupIntegrity.valid) {
-    console.error(`Stored chain integrity issue on startup: ${startupIntegrity.error}`);
-  }
-} catch (error) {
-  console.error(`Startup chain validation failed after retries: ${error?.message || error}`);
 }
 
 const configuredPeers = (process.env.BANNEKER_PEERS || process.env.BLACKCOIN_PEERS || '').split(',').map(value => value.trim()).filter(Boolean);
@@ -128,7 +128,6 @@ const trustProxyHops = process.env.TRUST_PROXY_HOPS;
 if (trustProxyHops !== undefined && String(trustProxyHops).trim() !== '') {
   const hops = Number(trustProxyHops);
   if (!Number.isInteger(hops) || hops < 0 || hops > 5) {
-    ledger.close();
     throw new Error('TRUST_PROXY_HOPS must be an integer from 0 to 5.');
   }
   app.set('trust proxy', hops);
@@ -157,6 +156,24 @@ app.use((req, res, next) => {
     return res.sendFile(path.join(webRoot, 'index.html'));
   }
   next();
+});
+
+// Readiness gate. Render only needs the socket to open; this keeps the process
+// alive while Turso wakes and makes the initializing state explicit to clients.
+app.use((req, res, next) => {
+  const isApi = req.path.startsWith('/api');
+  const isHealth = req.path === '/health' || req.path.startsWith('/health/');
+  if (!isApi && !isHealth) return next();
+  if (ledger) return next();
+  res.set('Cache-Control', 'no-store');
+  if (ledgerInitError) {
+    return res.status(503).json({
+      ok: false,
+      reason: 'INITIALIZATION_FAILED',
+      error: ledgerInitError?.message || 'Ledger initialization failed.'
+    });
+  }
+  return res.status(503).json({ ok: false, reason: 'INITIALIZING' });
 });
 
 const allowedOrigins = new Set(
@@ -608,17 +625,26 @@ app.use((error, _req, res, _next) => {
   res.status(status).json({ error: message });
 });
 
-const server = app.listen(port, host, async () => {
-  console.log(`BNKR node listening at http://${host}:${port}`);
+async function startPeerSync() {
+  if (!ledger) return;
   try {
     const peers = await ledger.getPeers();
     if (peers.length) void synchronizePeers().catch(error => console.warn(`Startup peer sync failed: ${error?.message || error}`));
   } catch (error) {
     console.warn(`Startup peer discovery failed: ${error?.message || error}`);
   }
+}
+
+// Bind the port before touching the database so Render sees an open socket
+// immediately. Ledger creation and retry happen in the background; all API and
+// health traffic receives 503 INITIALIZING until the ledger is ready.
+const server = app.listen(port, '0.0.0.0', () => {
+  console.log(`BNKR node listening at http://0.0.0.0:${port}`);
+  void initializeLedger();
 });
 
 const peerSyncInterval = setInterval(async () => {
+  if (!ledger) return;
   try {
     const peers = await ledger.getPeers();
     if (peers.length) void synchronizePeers().catch(error => console.warn(`Periodic peer sync failed: ${error?.message || error}`));
@@ -629,9 +655,10 @@ const peerSyncInterval = setInterval(async () => {
 peerSyncInterval.unref();
 
 function shutdown() {
+  shuttingDown = true;
   clearInterval(peerSyncInterval);
   server.close(() => {
-    ledger.close();
+    if (ledger) ledger.close();
     process.exit(0);
   });
 }
