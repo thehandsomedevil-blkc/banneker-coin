@@ -1,0 +1,17 @@
+node_modules/
+dist/
+.env
+.env.*
+
+# Local chain databases and SQLite sidecars. Never commit ledger state.
+*.db
+*.db-wal
+*.db-shm
+
+# Internal audit scratch reports. The public V2 release document is
+# BNKR_PROTOCOL_V2_CORRECTION_SPECIFICATION.md and is intentionally not ignored.
+BNKR_*_2026-11-17.md
+BNKR_PHASE1_REVIEW_*.md
+BNKR_PROTOCOL_V2_INDEPENDENT_REVIEW.md
+BNKR_NETWORK_IDENTITY_PROTOCOL_V2_SPECIFICATION.md
+SECURITY_AUDIT_*.md

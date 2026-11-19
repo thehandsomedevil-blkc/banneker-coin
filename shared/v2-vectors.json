@@ -1,0 +1,74 @@
+[
+  {
+    "id": "V-01",
+    "bytes": 363,
+    "sha256": "5807a168c2bf3f494b64fda9f522348950041325a66387f53dc60b6c4b47ba23",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50\"},\"message\":null}"
+  },
+  {
+    "id": "V-02",
+    "bytes": 647,
+    "sha256": "2f760c32ae85c56e5d5c22d5c22790260e6c35d470240af9ca4c5eb434f56999",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50\"},\"message\":null}"
+  },
+  {
+    "id": "V-03",
+    "bytes": 937,
+    "sha256": "830208e022beca06a105ba5dd67b3ecc8b1656c1983f67b6f75c32b164c38e2d",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"},{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAyAAA=\",\"amount\":\"0.25\",\"fee\":\"0.001\",\"nonce\":2,\"timestamp\":1794999999500,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50.002\"},\"message\":null}"
+  },
+  {
+    "id": "V-04",
+    "bytes": 362,
+    "sha256": "91068d45d8038a437ba2342fa87df8184f1de30e27b53c81d089130f82088474",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"0\"},\"message\":null}"
+  },
+  {
+    "id": "V-05",
+    "bytes": 376,
+    "sha256": "562a17a275769d1f62d53db6addc42f9eec5ac4f89ad9d9cd863c1ca2a9b83c8",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":9007199254740991,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":9007199254740991,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50\"},\"message\":null}"
+  },
+  {
+    "id": "V-06",
+    "bytes": 647,
+    "sha256": "0a0c650021e223d0efaa917a1be0884959848a3127c5e74a18ad6950c9a97f94",
+    "preimage": "{\"version\":2,\"networkId\":\"BLKC-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50\"},\"message\":null}"
+  },
+  {
+    "id": "V-07",
+    "bytes": 647,
+    "sha256": "804ac44933ce85994f890496964f7cb7a28ac87d8a9e61163f12d49fe1196a07",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-TESTNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50\"},\"message\":null}"
+  },
+  {
+    "id": "V-08",
+    "bytes": 937,
+    "sha256": "60bba283f1c977a21938829390b3d24aecd2b4e835e4a774f62400505bcc036e",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAyAAA=\",\"amount\":\"0.25\",\"fee\":\"0.001\",\"nonce\":2,\"timestamp\":1794999999500,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"},{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50.002\"},\"message\":null}"
+  },
+  {
+    "id": "V-09",
+    "bytes": 605,
+    "sha256": "f7cdfe74c1666590daecd1dd931a54f56f759ddac3fcb8c5067230a14cb7c395",
+    "preimage": "{\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50\"},\"message\":null}"
+  },
+  {
+    "id": "V-10",
+    "bytes": 655,
+    "sha256": "fd9115ee7e03022da7eac4852cecb2b4be0a84806494f376c12818e8289695b4",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"0.00000001\"},\"message\":null}"
+  },
+  {
+    "id": "V-11",
+    "bytes": 671,
+    "sha256": "85891ffc60b08b75971026ec16a634eeac3f03e5cb74721f914b18af96a2866a",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"60238fecf275e70db6ce6e18ccba1afa302152d3763576d89832835b18dfb5e1\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50\"},\"message\":\"fictional non-null message\"}"
+  },
+  {
+    "id": "V-12",
+    "bytes": 647,
+    "sha256": "c9df92e3293e54920523fdea9665d39728c0548baa6d9567b5940900e5ac8557",
+    "preimage": "{\"version\":2,\"networkId\":\"BNKR-MAINNET-V1\",\"height\":1200,\"timestamp\":1795000000000,\"prevHash\":\"903356c4e7106fc6bd2665e9b80ce4eb8480d4842c806f7c4391e51347d35c5d\",\"difficulty\":5,\"nonce\":424242,\"miner\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"transactions\":[{\"sender\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0VOREVSLUtFWS0wMQA=\",\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtUkVDSVBJRU5ULTAxAAA=\",\"amount\":\"1.5\",\"fee\":\"0.001\",\"nonce\":1,\"timestamp\":1794999999000,\"signature\":\"Qk5LUi1WMi1GSUNUSU9OQUwtU0lHLTAwMDAwMQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==\"}],\"reward\":{\"recipient\":\"Qk5LUi1WMi1GSUNUSU9OQUwtTUlORVItS0VZLTAwMDE=\",\"amount\":\"50\"},\"message\":null}"
+  }
+]
