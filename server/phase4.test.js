@@ -1,5 +1,5 @@
 // Phase 4: compiled protocol parameters (Q-1, Q-2, Q-15, maturity), era-aware
-// retargeting, and read-only verification of the compiled Mainnet Checkpoint 1.
+// retargeting, and read-only verification of the compiled Mainnet Checkpoints.
 
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -35,7 +35,7 @@ import {
 const projectRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 
 test('Q-1, Q-15, and maturity are compiled with the owner-selected values', () => {
-  assert.equal(V2_ACTIVATION_HEIGHT, 2026);
+  assert.equal(V2_ACTIVATION_HEIGHT, 5000);
   assert.equal(TARGET_BLOCK_TIME_SECONDS, 60);
   assert.equal(COINBASE_MATURITY, 53);
   assert.equal(HALVING_INTERVAL, 210_000);
@@ -61,7 +61,7 @@ test('the target cadence is era-aware: 15s Era 1 history, 60s V2', () => {
   }
   // The same 135-second window stays at difficulty 1 under the frozen Era 1
   // target but is "fast" under the 60-second V2 target and raises difficulty.
-  assert.equal(expectedDifficulty(blocks, 10, { v2ActivationHeight: 2026 }), 1);
+  assert.equal(expectedDifficulty(blocks, 10, { v2ActivationHeight: 5000 }), 1);
   assert.equal(expectedDifficulty(blocks, 10, { v2ActivationHeight: 10 }), 2);
 });
 
@@ -75,15 +75,22 @@ test('the halving schedule stays height-only and strictly capped at 21,000,000 B
   assert.equal(rewardForHeight(1, MAX_SUPPLY - 1), 1);
 });
 
-test('compiled Mainnet Checkpoint 1 is enforced by default and excluded from a testnet schedule', async () => {
-  assert.equal(COMPILED_MAINNET_CHECKPOINTS.length, 1);
-  const anchor = COMPILED_MAINNET_CHECKPOINTS[0];
-  assert.equal(anchor.height, 731);
-  assert.equal(anchor.protocolVersion, 1);
-  assert.equal(anchor.blockHash,
+test('compiled Mainnet Checkpoints are enforced by default and excluded from a testnet schedule', async () => {
+  assert.equal(COMPILED_MAINNET_CHECKPOINTS.length, 2);
+  const [first, second] = COMPILED_MAINNET_CHECKPOINTS;
+  assert.equal(first.height, 731);
+  assert.equal(first.protocolVersion, 1);
+  assert.equal(first.blockHash,
     '000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8');
-  assert.equal(anchor.chainWork, '212511536');
-  assert.equal(anchor.genesisHash, GENESIS_HASH);
+  assert.equal(first.chainWork, '212511536');
+  assert.equal(first.genesisHash, GENESIS_HASH);
+
+  assert.equal(second.height, 2500);
+  assert.equal(second.protocolVersion, 1);
+  assert.equal(second.blockHash,
+    '000004f48c5efffd42058140ba6532eeff322a33871a030ce4aefb54bdc38dd7');
+  assert.equal(second.chainWork, '2482285360');
+  assert.equal(second.genesisHash, GENESIS_HASH);
 
   const mainnet = await createLedger(':memory:');
   const testnet = await createLedger(':memory:', {
@@ -92,13 +99,14 @@ test('compiled Mainnet Checkpoint 1 is enforced by default and excluded from a t
   });
   try {
     const mainnetIdentity = mainnet.getChainIdentity();
-    assert.equal(mainnetIdentity.checkpointCount, 1);
-    assert.equal(mainnetIdentity.v2ActivationHeight, 2026);
+    assert.equal(mainnetIdentity.checkpointCount, 2);
+    assert.equal(mainnetIdentity.v2ActivationHeight, 5000);
     assert.equal(mainnetIdentity.coinbaseMaturity, 53);
     assert.equal(mainnetIdentity.targetBlockSeconds, 60);
     const mainnetState = await mainnet.validateStoredChain();
     assert.equal(mainnetState.checkpointState, 'NOT_YET_APPLICABLE');
     assert.equal(mainnetState.checkpoints[0].height, 731);
+    assert.equal(mainnetState.checkpoints[1].height, 2500);
 
     const testnetIdentity = testnet.getChainIdentity();
     assert.equal(testnetIdentity.checkpointCount, 0, 'a V2-era anchor would be the wrong era on testnet');
@@ -112,7 +120,7 @@ test('compiled Mainnet Checkpoint 1 is enforced by default and excluded from a t
   }
 });
 
-test('the compiled checkpoint matches a read-only derivation from bannekercoin.db (TE-63)', async (t) => {
+test('Checkpoint 1 matches a read-only derivation from bannekercoin.db (TE-63)', async (t) => {
   const source = path.join(projectRoot, 'bannekercoin.db');
   if (!existsSync(source)) {
     t.skip('bannekercoin.db is not present in this checkout');

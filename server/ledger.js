@@ -90,7 +90,7 @@ function parseOptionalHeight(value, label, { allowZero = false } = {}) {
 }
 
 /**
- * Q-1 is resolved: V2 activates at height 2026 by default. Setting
+ * Q-1 is resolved: V2 activates at height 5000 by default. Setting
  * BANNEKER_V2_ACTIVATION_HEIGHT is a consensus switch: height H is the first
  * V2 block, and H - 1 remains Era 1. A value of 0 is rejected because genesis
  * is always a V1 block. An explicit empty value falls back to the compiled
@@ -522,10 +522,10 @@ function genesisBlock() {
 export const GENESIS_HASH = genesisBlock().hash;
 
 /**
- * Compiled Mainnet Checkpoint 1 (Q-2). The height and hash are compiled
- * constants; only the tuple's network and genesis binding is taken from the
- * permanent identity above. `appliesToActivation` keeps a mainnet Era 1 anchor
- * out of a testnet schedule whose activation would make height 731 a V2 block.
+ * Compiled Mainnet Checkpoints (Q-2). Heights, hashes, and cumulative work are
+ * compiled constants; only the tuples' network and genesis binding is taken
+ * from the permanent identity above. `appliesToActivation` keeps mainnet Era 1
+ * anchors out of a testnet schedule whose activation would make them V2 blocks.
  */
 export const COMPILED_MAINNET_CHECKPOINTS = Object.freeze(
   MAINNET_CHECKPOINT_ANCHORS.map(anchor => Object.freeze({
@@ -858,7 +858,7 @@ export async function createLedgerWithRetry(
 export async function createLedger(databasePath = 'blackcoin.db', options = {}) {
   // Consensus switches are read once at construction. A running process never
   // changes era mid-flight. Q-1 is resolved: the compiled default is height
-  // 2026, and an operator may move it for testnet with
+  // 5000, and an operator may move it for testnet with
   // BANNEKER_V2_ACTIVATION_HEIGHT. An empty environment value falls back to the
   // compiled default instead of silently unscheduling consensus.
   const activationEnv = envValue(V2_ACTIVATION_ENV);
@@ -883,8 +883,8 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
   });
 
   // Checkpoint configuration is a compiled/operator constant, never a database
-  // row. Q-2 is resolved: the compiled Mainnet Checkpoint 1 at height 731 is
-  // enforced by default. An operator may supply an explicit set, but an empty
+  // row. Q-2 is resolved: the compiled Mainnet Checkpoints at heights 731 and
+  // 2500 are enforced by default. An operator may supply an explicit set, but an empty
   // environment value falls back to the compiled anchor rather than disabling
   // consensus. An explicit programmatic `checkpoints: []` disables it for local
   // chains, as tests do.
@@ -1264,26 +1264,41 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
   }
 
   // Startup validation and migration with safe recovery: if the stored tip is
-  // invalid, roll back only invalid tip blocks to the last valid block. Account
-  // reconstruction is checked against a full replay and repaired atomically.
-  // Never wipe to genesis.
+  // invalid, roll back only invalid tip blocks to the last valid block. Chain
+  // validity is prefix-closed, so binary search over the rollback point needs
+  // at most log2(n) validation passes instead of one per block (the old O(n²)
+  // path). Account reconstruction is checked against a full replay and repaired
+  // atomically. Never wipe to genesis.
   let storedBlocks = await getBlocks();
   let startupValidation = validateChainInternal(storedBlocks, consensus);
   let recovery = null;
   if (!startupValidation.valid) {
-    for (let end = storedBlocks.length - 1; end >= 1; end -= 1) {
+    const tipError = startupValidation.error;
+    let low = 1;
+    let high = storedBlocks.length - 1;
+    let best = null;
+    while (low <= high) {
+      const end = Math.floor((low + high) / 2);
       const candidate = storedBlocks.slice(0, end);
       const result = validateChainInternal(candidate, consensus);
       if (result.valid) {
-        recovery = { blocks: candidate, removed: storedBlocks.length - end, error: startupValidation.error };
-        storedBlocks = candidate;
-        startupValidation = result;
-        break;
+        best = { blocks: candidate, validation: result };
+        low = end + 1;
+      } else {
+        high = end - 1;
       }
     }
-    if (!recovery) {
+    if (best) {
+      recovery = {
+        blocks: best.blocks,
+        removed: storedBlocks.length - best.blocks.length,
+        error: tipError
+      };
+      storedBlocks = best.blocks;
+      startupValidation = best.validation;
+    } else {
       client.close();
-      throw new Error(`Stored chain failed integrity verification: ${startupValidation.error}`);
+      throw new Error(`Stored chain failed integrity verification: ${tipError}`);
     }
   }
 

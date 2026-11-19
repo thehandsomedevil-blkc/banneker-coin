@@ -9,13 +9,14 @@
 // values below starting at V2_ACTIVATION_HEIGHT.
 
 /**
- * Q-1. The first V2 block is height 2026, honouring the founding year of
- * Banneker Coin in Baltimore. Genesis (height 0) and every block below 2026
- * remain Era 1. Testnet nodes may move this value with
+ * Q-1. The first V2 block is height 5000. The original founding-year choice of
+ * 2026 was postponed because the live mainnet continued in Era 1 past it; this
+ * compiled default now matches the production schedule. Genesis (height 0) and
+ * every block below 5000 remain Era 1. Testnet nodes may move this value with
  * BANNEKER_V2_ACTIVATION_HEIGHT, which is a consensus switch and must be
  * identical on every node that is expected to agree.
  */
-export const V2_ACTIVATION_HEIGHT = 2026;
+export const V2_ACTIVATION_HEIGHT = 5000;
 
 /**
  * V2 target cadence: one block per minute, honouring Benjamin Banneker's 1753
@@ -55,16 +56,17 @@ export const V2_EMISSION = Object.freeze({
 });
 
 /**
- * Q-2. Compiled Mainnet Checkpoint 1 at height 731, honouring Banneker's birth
- * year, 1731. The tuple was derived from `bannekercoin.db` in read-only mode
- * (a byte-for-byte temporary copy) and its full ancestry was re-verified to
- * genesis under the canonical Era 1 preimage (TE-63). The `hash` column of the
- * database is not a trust input: `deriveMainnetCheckpointAnchor` reproduces
- * this tuple from the chain itself.
+ * Q-2. Compiled Mainnet Checkpoints.
+ *
+ * Checkpoint 1 at height 731 honours Banneker's birth year, 1731. Checkpoint 2
+ * at height 2500 was derived from the live mainnet history under the 5000
+ * activation schedule. Both tuples were derived from canonical Era 1 preimages
+ * (TE-63); a stored `hash` column is not a trust input. `deriveMainnetCheckpointAnchor`
+ * reproduces each tuple from the chain itself.
  *
  * An anchor is only applicable while it sits in Era 1 (height < activation).
- * A node whose activation height is at or below 731 does not inherit this
- * mainnet anchor, because the anchor's protocolVersion would then be wrong.
+ * A node whose activation height is at or below an anchor's height does not
+ * inherit that anchor, because the anchor's protocolVersion would then be wrong.
  */
 export const MAINNET_CHECKPOINT_ANCHORS = Object.freeze([
   Object.freeze({
@@ -72,6 +74,12 @@ export const MAINNET_CHECKPOINT_ANCHORS = Object.freeze([
     protocolVersion: 1,
     blockHash: '000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8',
     chainWork: '212511536'
+  }),
+  Object.freeze({
+    height: 2500,
+    protocolVersion: 1,
+    blockHash: '000004f48c5efffd42058140ba6532eeff322a33871a030ce4aefb54bdc38dd7',
+    chainWork: '2482285360'
   })
 ]);
 

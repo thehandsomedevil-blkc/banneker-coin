@@ -12,6 +12,8 @@
 > This document corrects a *specification*. It does not correct a *network*. V2 is not implemented, not active, and not on testnet. BNKR is not network-bound, not isolated from BLKC, and not decentralized. No source file, database, genesis value, network identifier, checkpoint, activation height, or production configuration was changed. All three databases were SHA-256 verified before and after writing; see §22.6.
 >
 > **Baseline correction of record:** the `accountsValid` capability exists **only as an uncommitted working-tree change**. It is absent from commit `908c642` and therefore cannot exist in any deployed build produced from that commit. The original V2 specification's "verified baseline" partly describes the working tree, not production. §11 separates five baselines explicitly, and every capability claim below is labelled with the baseline it comes from.
+>
+> **Current-state note (2026-11-19).** The design-only review below remains the historical record. The current compiled configuration is `V2_ACTIVATION_HEIGHT = 5000` with Mainnet Checkpoints at heights `731` and `2500`; startup recovery uses a binary search over the rollback point instead of the old linear replay. §21.2, §21.3, and §21.9 are authoritative for current values. No mainnet database was modified.
 
 ### Label conventions
 
@@ -35,9 +37,9 @@
 | Block/transaction submitted? | **No.** |
 | Peer contacted or synchronized? | **No.** |
 | Commits / pushes / branch changes? | **None.** |
-| Q-1 selected? | **Yes — height 2026** (owner decision, 2026-11-18; §21.9). |
-| Q-2 selected? | **Yes — Mainnet Checkpoint 1 at height 731** (owner decision, 2026-11-18; §21.9). |
-| V2 activated on mainnet? | **No.** The parameters are compiled; the live chain is far below height 2026. |
+| Q-1 selected? | **Yes — height 5000** (owner initially selected 2026 on 2026-11-18; compiled schedule postponed to 5000 on 2026-11-19; §21.2, §21.9). |
+| Q-2 selected? | **Yes — Mainnet Checkpoints at heights 731 and 2500** (731 selected 2026-11-18; 2500 derived from the live chain and appended 2026-11-19; §21.3, §21.9). |
+| V2 activated on mainnet? | **No.** The compiled activation height is 5000. The live Era 1 chain passed 2026 before the correction and had not reached 5000 on 2026-11-19. |
 | Decentralization claimed? | **No.** |
 
 ---
@@ -65,7 +67,7 @@ The original V2 design has the right objective — bind network identity into th
 - Genesis (`49f9e886…ebaa`), `NETWORK_ID` (`BNKR-MAINNET-V1`), `PROTOCOL_UPGRADE_HEIGHT` (136), `MAX_SUPPLY`, `INITIAL_REWARD`, `HALVING_INTERVAL`, `TARGET_BLOCK_SECONDS`, `ADJUSTMENT_INTERVAL`, `MAX_DIFFICULTY`, `MEDIAN_TIME_WINDOW`, `MAX_REORG_DEPTH`, reward rules, fee schedule, account model, or any stored block.
 - The original V2 document or the independent review.
 - Any production environment variable or deployment.
-- Q-1 or Q-2 in the original design-only correction. They are now selected by owner decision in §21.9 (2026-11-18); the earlier "unresolved" text is retained as history, not as current status.
+- Q-1 or Q-2 in the original design-only correction. They are now selected by owner decision in §21.9: Q-1 was originally `2026` and is now compiled as `5000`, and Q-2 now includes Mainnet Checkpoint 2 at height `2500`. The earlier "unresolved" text is retained as history, not as current status.
 
 ### 1.3 Blocker resolution summary
 
@@ -200,14 +202,14 @@ All 26 are specified as **tests to be written and executed later**. None has bee
 | **TE-62** | Unsatisfiable: a v1 binary truncates a v2 DB via the repair loop; it does not refuse | **Corrected / split** | TE-62a: new binary + future-version DB ⇒ safe refusal, no repair. TE-62b: v1 binary + v2 DB ⇒ documented truncation harness, expected behaviour, never described as safe. §10.6 |
 | **Threat→test mapping** | Every T-n mapped to TE-n by number; all 17 semantically wrong | **Corrected** | §17 gives the full corrected matrix; each test maps to a threat or invariant. |
 | **Monetary-policy tests** | No reward, supply, fee, or inflation test existed | **Corrected** | §15.9, §16.12: MT-01…MT-15 plus reorg/supply tests. |
-| **Activation/checkpoint decisions** | Q-1/Q-2 unresolved in the design-only correction | **Resolved by owner on 2026-11-18** | §21.9 records the selected values; the original evidence requirements remain an open independence gap, not a code gap. |
+| **Activation/checkpoint decisions** | Q-1/Q-2 unresolved in the design-only correction | **Resolved by owner on 2026-11-18; current compiled schedule corrected 2026-11-19** | §21.2, §21.3, and §21.9 record activation `5000` and checkpoints at `731` and `2500`; the original evidence requirements remain an open independence gap, not a code gap. |
 
 ### 2.5 Owner decisions
 
 | ID | Question | Disposition |
 |---|---|---|
-| Q-1 | `PROTOCOL_V2_HEIGHT` | **Resolved** — 2026 (owner, 2026-11-18; §21.9) |
-| Q-2 | Which heights become checkpoints | **Resolved** — Mainnet Checkpoint 1 at height 731 (owner, 2026-11-18; §21.9) |
+| Q-1 | `PROTOCOL_V2_HEIGHT` | **Resolved** — 5000 (owner initially selected 2026 on 2026-11-18; compiled schedule corrected 2026-11-19; §21.2, §21.9) |
+| Q-2 | Which heights become checkpoints | **Resolved** — Mainnet Checkpoints at heights 731 and 2500 (731 selected 2026-11-18; 2500 derived from the live chain and appended 2026-11-19; §21.3, §21.9) |
 | Q-3 | Merkle root in a future era | **Owner** — recommend no for V2; state root is separate (Q-18) |
 | Q-4 | Peer authentication mandatory? | **Owner** — recommend mandatory for write endpoints (§14.10) |
 | Q-5 | Transaction version / strict schema | **Owner** — V2 block-level strictness is mandatory regardless; tx-level version deferred |
@@ -1979,7 +1981,7 @@ M_blocks = ceil(D_margin * 86400 / T_obs)
 
 ### 13.3 Q-1 verdict
 
-**Historical verdict; superseded by §21.9.** The design-only review left `H` unselected because no second implementation or independent operator existed. On 2026-11-18 the owner selected height 2026, which is now compiled as `V2_ACTIVATION_HEIGHT`. The readiness concerns below remain valid as deployment and governance considerations, not as a reason to leave the parameter unset.
+**Historical verdict; superseded by §21.2 and §21.9.** The design-only review left `H` unselected because no second implementation or independent operator existed. On 2026-11-18 the owner selected height 2026. The live mainnet then remained in Era 1 past that height, so on 2026-11-19 the compiled schedule was postponed to `V2_ACTIVATION_HEIGHT = 5000`. The readiness concerns below remain valid as deployment and governance considerations, not as a reason to leave the parameter unset.
 
 ### 13.4 Q-2 evidence pack (historical; checkpoint now selected in §21.9)
 
@@ -3347,12 +3349,12 @@ A phase is done when its exit gate is **evidenced** by an artifact that another 
 
 ### 21.1 The register
 
-This register was written as a design-only record. The status column below is the current implementation status as of 2026-11-18. Q-1, Q-2, Q-15, and the coinbase-maturity parameter were subsequently selected by the owner and are compiled in `shared/protocol.js`; §21.9 is the current decision record. Earlier sections that describe them as unresolved are retained as the historical review record and are superseded by §21.9.
+This register was written as a design-only record. The status column below is the current implementation status as of 2026-11-19. Q-1, Q-2, Q-15, and the coinbase-maturity parameter were selected by the owner and are compiled in `shared/protocol.js`. Q-1 was originally `2026` and was postponed to `5000` on 2026-11-19; Q-2 was extended from height `731` with a live-derived Checkpoint 2 at height `2500`. §21.2, §21.3, and §21.9 are the current decision record. Earlier sections that describe them as unresolved are retained as the historical review record and are superseded by those sections.
 
 | ID | Question | Owner | Status | Evidence required | Blocking |
 |---|---|---|---|---|---|
-| **Q-1** | What is `PROTOCOL_V2_HEIGHT`? | Owner | **RESOLVED — 2026** (2026-11-18; §21.9) | Owner decision compiled as `V2_ACTIVATION_HEIGHT`; env override for isolated testnets | no code blocker; publication and cancellation authority remain |
-| **Q-2** | Which heights become `CP-PRE`, `CP-ACT`, `CP-TIP-AT-RELEASE`? | Owner | **RESOLVED — Mainnet Checkpoint 1 at height 731** (2026-11-18; §21.9) | Canonical derivation + full ancestry verified; independent second derivation/publication still open | no local-code blocker; P3 attestation/publication remains |
+| **Q-1** | What is `PROTOCOL_V2_HEIGHT`? | Owner | **RESOLVED — 5000** (owner selected 2026 on 2026-11-18; compiled schedule postponed 2026-11-19; §21.2, §21.9) | Owner decision compiled as `V2_ACTIVATION_HEIGHT`; env override for isolated testnets | no code blocker; publication and cancellation authority remain |
+| **Q-2** | Which heights become `CP-PRE`, `CP-ACT`, `CP-TIP-AT-RELEASE`? | Owner | **RESOLVED — Mainnet Checkpoints at heights 731 and 2500** (731 selected 2026-11-18; 2500 appended 2026-11-19; §21.3, §21.9) | Canonical derivation + full ancestry verified for both; independent second derivation/publication still open | no local-code blocker; P3 attestation/publication remains |
 | **Q-3** | Merkle root in a future era? | Owner | Open | Cost/benefit of a transaction commitment | no (V2) |
 | **Q-4** | Is peer authentication mandatory for write endpoints? | Owner | Open | Threat model §14.10, TE-58 | P4 |
 | **Q-5** | Transaction-level version field? | Owner | Open | Wallet compatibility, Q-24 | no (V2) |
@@ -3379,32 +3381,39 @@ This register was written as a design-only record. The status column below is th
 
 ### 21.2 Q-1 — activation height
 
-**RESOLVED (2026-11-18).** The owner selected `H = 2026`, honouring the founding year of Banneker Coin in Baltimore. The value is compiled as `V2_ACTIVATION_HEIGHT = 2026` in `shared/protocol.js` and is re-exported by `server/ledger.js`. Isolated testnets may override it with `BANNEKER_V2_ACTIVATION_HEIGHT`; the Phase 4 rehearsal used `2`.
+**RESOLVED (owner decision 2026-11-18; compiled schedule corrected 2026-11-19).** The owner originally selected `H = 2026`, honouring the founding year of Banneker Coin in Baltimore. The live mainnet continued in Era 1 past that height, so the compiled default was postponed to `V2_ACTIVATION_HEIGHT = 5000` in `shared/protocol.js` and is re-exported by `server/ledger.js`. This current default matches the production activation schedule without requiring `BANNEKER_V2_ACTIVATION_HEIGHT`. Isolated testnets may still override it with that variable; the Phase 4 rehearsal used `2`.
 
-Genesis and every height below 2026 remain Era 1. `targetBlockSecondsForHeight(height, activation)` keeps the frozen 15-second retarget target for Era 1 and selects the 60-second V2 target at `H`, so historical blocks replay exactly. No mainnet deployment, announcement, or activation occurred: the verified mainnet tip is far below height 2026.
+Genesis and every height below 5000 remain Era 1. `targetBlockSecondsForHeight(height, activation)` keeps the frozen 15-second retarget target for Era 1 and selects the 60-second V2 target at `H`, so historical blocks replay exactly. At the 2026-11-19 live check the tip was height `2858`, entirely Era 1; no mainnet V2 block had been activated. The earlier statement that the tip was "far below 2026" is historical and no longer applies.
 
 The original evidence pack in §13.2 remains the historical record of why this question was initially left open. The remaining operational work is publication through the Q-8 channels, a named cancellation authority (Q-23), and independent operation (Q-6/Q-7). Those are governance and deployment gaps, not a reason to leave the compiled value unselected.
 
 ### 21.3 Q-2 — checkpoint heights and hashes
 
-**RESOLVED (2026-11-18).** The owner selected Mainnet Checkpoint 1 at height `731`, honouring Banneker's birth year. The compiled tuple is:
+**RESOLVED (731 selected 2026-11-18; 2500 appended 2026-11-19).** The owner selected Mainnet Checkpoint 1 at height `731`, honouring Banneker's birth year. Checkpoint 2 at height `2500` was derived from the live mainnet history under the corrected activation schedule and appended alongside it. The compiled tuples are:
+
+| Field | Checkpoint 1 | Checkpoint 2 |
+|---|---|---|
+| `height` | `731` | `2500` |
+| `protocolVersion` | `1` | `1` |
+| `blockHash` | `000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8` | `000004f48c5efffd42058140ba6532eeff322a33871a030ce4aefb54bdc38dd7` |
+| `chainWork` | `212511536` | `2482285360` |
+| `genesisHash` | `49f9e88619178347aaf806ba33c00ab973d1d62e45db982a851e86728880ebaa` | `49f9e88619178347aaf806ba33c00ab973d1d62e45db982a851e86728880ebaa` |
+| `networkId` | `BNKR-MAINNET-V1` | `BNKR-MAINNET-V1` |
+
+The canonical digests of the complete two-checkpoint set are:
 
 | Field | Value |
 |---|---|
-| `height` | `731` |
-| `protocolVersion` | `1` |
-| `blockHash` | `000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8` |
-| `chainWork` | `212511536` |
-| `genesisHash` | `49f9e88619178347aaf806ba33c00ab973d1d62e45db982a851e86728880ebaa` |
-| `networkId` | `BNKR-MAINNET-V1` |
-| manifest digest | `540e3f58c7b34ce83931621300febd6989f27cd8fb6922e4a53281fbe60c6ecd` |
-| checkpoint-set digest | `0c965332e0222eb13e7500eb866e30648b57c7d22d4d6d563e8044d70c294917` |
+| manifest digest | `c383829f4a89d915643711f3f1eaadb26afbb4bedf8d62e95205d8be0c362f8f` |
+| checkpoint-set digest | `85eb51755c230b5255fcaf1f169bba208dd89cd20b3722d62e1759490f22a346` |
 
-`scripts/derive-mainnet-checkpoint.mjs` copies `bannekercoin.db` byte-for-byte to temporary storage, recomputes the canonical Era 1 hash from the block history (TE-63), verifies the full ancestry to genesis, and compares the derived tuple against the compiled anchor. The live database is never opened in place. The result at the verified tip (858) is an exact match.
+`scripts/derive-mainnet-checkpoint.mjs` copies `bannekercoin.db` byte-for-byte to temporary storage, recomputes the canonical Era 1 hash from the block history (TE-63), verifies the full ancestry to genesis, and compares the derived tuple against Checkpoint 1. The live database is never opened in place. The result at the verified local tip (858) is an exact match. That script does **not** derive Checkpoint 2 because the local database tip is below height 2500.
 
-The anchor is enforced by default only while height 731 is an Era 1 fact, that is, when the activation height is greater than 731. A testnet schedule with activation at or below 731 excludes it so that an Era 1 anchor is never applied to a V2 block.
+Checkpoint 2 was derived from the live mainnet through the paged `/api/peer/blocks` endpoint for heights `0` through `2500`. Full ancestry was verified under the `5000` activation schedule; the recomputed top hash and cumulative chain work matched the stored block exactly. The stored `hash` column was not used as a trust input. No mainnet database file was modified during either derivation.
 
-The original two-independent-derivations requirement is not satisfied by a single operator and is recorded as an outstanding P3 attestation/publication gap in §21.9 and §22.8. It does not change the owner selection or the compiled value; it limits the claim that can be made about independent verification. `CP-ACT` and `CP-TIP-AT-RELEASE` remain unselected.
+An anchor is enforced by default only while its height is an Era 1 fact, that is, when the activation height is greater than that anchor's height. With the compiled activation `5000`, both anchors apply. A testnet schedule with activation at or below `2500` excludes Checkpoint 2; one at or below `731` excludes both, so an Era 1 anchor is never applied to a V2 block.
+
+The original two-independent-derivations requirement is not satisfied by a single operator and is recorded as an outstanding P3 attestation/publication gap in §21.9 and §22.8. It does not change the owner selection or the compiled values; it limits the claim that can be made about independent verification. `CP-ACT` and `CP-TIP-AT-RELEASE` remain unselected.
 
 ### 21.4 Q-19 — cadence and `MAX_REORG_DEPTH`
 
@@ -3454,9 +3463,9 @@ V2 requires canonical decimals inside blocks: `"1.5"`, never `"1.50"`, `"1e-8"`,
 
 ### 21.8 What the register means
 
-Twenty-four decisions are recorded. Four owner selections are now compiled and current: Q-1, Q-2, Q-15, and the coinbase-maturity parameter. The others retain the status shown in §21.1. The original design-only rule — that a reviewer must not invent an owner decision — is preserved; the selections below come from the owner's 2026-11-18 instruction, not from an inference in this document.
+Twenty-four decisions are recorded. Four owner selections are now compiled and current: Q-1, Q-2, Q-15, and the coinbase-maturity parameter. The others retain the status shown in §21.1. The original design-only rule — that a reviewer must not invent an owner decision — is preserved; the selections come from the owner's 2026-11-18 instruction and the 2026-11-19 live-chain correction recorded in §21.2 and §21.3, not from an inference in this document.
 
-Remaining activation gaps include Q-6 (public testnet identity), Q-7 (second operator), Q-17/Q-22 (third-party serializer), Q-19 (reorg/cadence policy), Q-23 (cancellation authority), Q-20/Q-21 (release and attestation), and the independent second derivation of the checkpoint. Q-1 and Q-2 no longer block a compiling local implementation, but publication and independent operation still block a public activation claim.
+Remaining activation gaps include Q-6 (public testnet identity), Q-7 (second operator), Q-17/Q-22 (third-party serializer), Q-19 (reorg/cadence policy), Q-23 (cancellation authority), Q-20/Q-21 (release and attestation), and the independent second derivation of both checkpoints. Q-1 and Q-2 no longer block a compiling local implementation, but publication and independent operation still block a public activation claim.
 
 ### 21.9 Phase 4 owner-selected parameters and live verification
 
@@ -3464,11 +3473,13 @@ The following values are the current compiled configuration. They are consensus 
 
 | Parameter | Selected value | Rationale | Compiled location | Status |
 |---|---|---|---|---|
-| `V2_ACTIVATION_HEIGHT` (Q-1) | `2026`; override `BANNEKER_V2_ACTIVATION_HEIGHT` for isolated testnets | Founding year of Banneker Coin in Baltimore | `shared/protocol.js`, exported by `server/ledger.js` | **RESOLVED** |
+| `V2_ACTIVATION_HEIGHT` (Q-1) | `5000`; override `BANNEKER_V2_ACTIVATION_HEIGHT` for isolated testnets | Original founding-year height `2026` was postponed on 2026-11-19 because the live chain remained Era 1 past it; `5000` matches the production schedule | `shared/protocol.js`, exported by `server/ledger.js` | **RESOLVED** |
 | Mainnet Checkpoint 1 (Q-2) | height `731`, hash `000053a9…ed2f8`, chain work `212511536` | Banneker's birth year; derived from canonical Era 1 history | `shared/protocol.js`, `server/ledger.js`, `scripts/derive-mainnet-checkpoint.mjs` | **RESOLVED** |
+| Mainnet Checkpoint 2 (Q-2) | height `2500`, hash `000004f4…3dd7`, chain work `2482285360` | Derived from the live mainnet paged block history under activation `5000`; full ancestry verified | `shared/protocol.js`, `server/ledger.js` | **RESOLVED** |
 | `TARGET_BLOCK_TIME_SECONDS` | `60` for V2; Era 1 remains `15` | One-minute blocks honour Banneker's 1753 striking clock; frozen Era 1 replay | `shared/protocol.js`; era-aware `expectedDifficulty` in `server/ledger.js` | **RESOLVED** |
 | `COINBASE_MATURITY` | `53` blocks; override `BANNEKER_COINBASE_MATURITY` for isolated testnets | Honours 1753, the year Banneker carved America's first wooden striking clock | `shared/protocol.js`, `server/ledger.js` | **RESOLVED** |
 | Halving and emission (Q-15) | `HALVING_INTERVAL=210000`, height-only, `changesAtV2:false`, terminal subsidy `0`, cap `21,000,000 BNKR` | Preserves Era 1 compatibility and a strictly capped supply; no wall-clock halving | `shared/protocol.js`, `rewardForHeight` in `server/ledger.js` | **RESOLVED** |
+| Startup recovery | binary search over the rollback point | Chain validity is prefix-closed; O(log n) validation passes replace the old O(n²) replay loop that froze the event loop on multi-thousand-block chains | `server/ledger.js` | **RESOLVED** |
 
 The live two-node rehearsal was performed with `scripts/phase4-testnet.mjs`. It is an isolated local rehearsal, not a public testnet; Q-6 remains open and the nodes reused `BNKR-MAINNET-V1`. Two server processes used temporary databases and ports 4184/4185 with `BANNEKER_V2_ACTIVATION_HEIGHT=2`, `BANNEKER_COINBASE_MATURITY=5`, and `BANNEKER_ALLOW_PRIVATE_PEERS=1`. The temporary databases and processes were removed at the end; no mainnet database was opened for write.
 
@@ -3480,8 +3491,10 @@ The live two-node rehearsal was performed with `scripts/phase4-testnet.mjs`. It 
 | Paged peer sync | node 2 fetched and replaced node 1's chain over `/api/peer/blocks`; one page, approximately 4.2 kB per run |
 | Identical tips | height `8`, chainWork `128`, and the same tip hash on both nodes (the hash itself varies because the rehearsal uses fresh keys and timestamps each run) |
 | Validation | both nodes reported `valid:true`, `accountsValid:true`, `healthy:true`; recipient balance `100000000` units on both |
-| Automated verification | `node --test`: 74/74 passing; `npm.cmd run build`: passed |
-| Read-only derivation | `scripts/derive-mainnet-checkpoint.mjs`: `ancestryVerified:true`, `matchesCompiledAnchor:true` |
+| Automated verification | `node --test`: 76/76 passing; `npm.cmd run build`: passed |
+| Read-only derivation (Checkpoint 1) | `scripts/derive-mainnet-checkpoint.mjs`: `ancestryVerified:true`, `matchesCompiledAnchor:true` |
+| Live derivation (Checkpoint 2) | paged `/api/peer/blocks` heights `0..2500`: full ancestry verified; derived hash and chain work matched the stored block |
+| Mainnet database integrity | `bannekercoin.db`, `blackcoin.db`, and `node-b.db` SHA-256 hashes unchanged |
 
 ---
 
@@ -3500,7 +3513,7 @@ These criteria are about the document in front of you, not about the software.
 | **AC-D5** | All 17 threat mappings are replaced with semantic mappings | **Met** — §17.2 |
 | **AC-D6** | Monetary policy is specified with adversarial tests | **Met** — §15.1–§15.12, MT-01…MT-15 |
 | **AC-D7** | The serialization is complete enough to implement without reading the original code | **Met** — §4, §5 |
-| **AC-D8** | No test is claimed to have passed | **Superseded** — this was a design-only criterion; §21.9 records the later local test run (74/74 passing) |
+| **AC-D8** | No test is claimed to have passed | **Superseded** — this was a design-only criterion; §21.9 records the later local test run (76/76 passing) |
 | **AC-D9** | No activation height, checkpoint height, or checkpoint hash is selected | **Superseded** — owner later selected Q-1 and Q-2 in §21.9; the historical record is retained |
 | **AC-D10** | No claim of decentralization or implementation | **Current for decentralization; superseded for implementation** — a local Phase 4 implementation and rehearsal exist; no mainnet deployment or independent operation is claimed |
 
@@ -3584,14 +3597,16 @@ STATUS          PHASE 4 PARAMETERS COMPILED - LOCAL V2 REHEARSAL PASSED - MAINNE
 NETWORK         BNKR (mainnet) / BNKR-TESTNET-V1 (not yet created)
 GENESIS         49f9e88619178347aaf806ba33c00ab973d1d62e45db982a851e86728880ebaa
 ERA 1 TIP       (not asserted in this document)
-V2 HEIGHT       2026 (compiled; env override for isolated testnets) [Q-1 RESOLVED]
-CHECKPOINTS     CP1 h731 000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8 [Q-2 RESOLVED]
+V2 HEIGHT       5000 (compiled; env override for isolated testnets) [Q-1 RESOLVED]
+CHECKPOINTS     CP1 h731 000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8
+                CP2 h2500 000004f48c5efffd42058140ba6532eeff322a33871a030ce4aefb54bdc38dd7 [Q-2 RESOLVED]
 TARGET/MATURE   60s V2 / 15s Era 1 / maturity 53 blocks
 EMISSION (Q-15) HEIGHT-ONLY; HALVING 210000; CAP 21000000 BNKR [RESOLVED]
 REORG DEPTH     UNCHANGED (100); policy open         [Q-19]
 ATTESTERS       NONE                                [Q-21]
 SIGNERS         NONE                                [Q-20]
-TEST RESULTS    node --test 74/74 PASS; npm run build PASS; local two-node V2 rehearsal PASS; checkpoint derivation MATCH
+TEST RESULTS    node --test 76/76 PASS; npm run build PASS; local two-node V2 rehearsal PASS; checkpoint derivations MATCH
+STARTUP         binary-search recovery; O(log n) validation passes
 READ-ONLY INPUT bannekercoin.db  50D66081EE77C766C47932C769DCCB0E290270E6028DB4E05277EBF7B4105EBB
 READ-ONLY INPUT blackcoin.db     EE60CC1F137C082A82BF53D3550B55ABA50770A5E56BF753333CFD4BB49C0817
 READ-ONLY INPUT node-b.db        B830729708282DBDFF009308B1C0ED82FAF31A4CBD8E9974AD975F8F74B9BED9
@@ -3626,9 +3641,9 @@ Stated precisely:
 
 1. **Five blockers closed as design defects.** Serialization, block schema, checkpoint authenticity, checkpoint continuity, and the production baseline are now specified completely enough that an implementation could be written and tested against them without reading the original code or this conversation.
 2. **The corrections are corrections, not a rewrite.** Genesis, Era 1 history, total work, the reward function, and every stored hash are unchanged by design. V2 remains an additive header field plus a compiled identity anchor.
-3. **Owner-selected parameters now exist.** Q-1 (`2026`), Q-2 (height 731), Q-15 (height-only halving), and coinbase maturity (`53`) are RESOLVED in §21.9 and compiled in `shared/protocol.js`. Nothing was deployed or activated on mainnet; the verified mainnet tip is below 2026.
+3. **Owner-selected parameters now exist.** Q-1 (`5000`), Q-2 (heights 731 and 2500), Q-15 (height-only halving), and coinbase maturity (`53`) are RESOLVED in §21.9 and compiled in `shared/protocol.js`. The original `2026` height was postponed to match the live Era 1 chain. No V2 block was activated on mainnet; the live tip was `2858` at the 2026-11-19 verification.
 4. **A local implementation and rehearsal exist, not a public network.** The temporary two-node lifecycle proved the era boundary, immature-spend rejection, signed V2 transaction admission and mining, paged sync, and matching validation. Q-6 (public `networkId`) and Q-7 (second operator) remain open.
-5. **The full matrix is not satisfied.** The original 93 `TE` identifiers and 15 `MT` cases were a specification, not evidence. Phase 4 adds 74 passing automated tests and a passing local rehearsal, but the public two-machine matrix, second implementation, and independent checkpoint derivation are still absent. A green local matrix is not a decentralization claim.
+5. **The full matrix is not satisfied.** The original 93 `TE` identifiers and 15 `MT` cases were a specification, not evidence. Phase 4 adds 76 passing automated tests and a passing local rehearsal, but the public two-machine matrix, second implementation, and independent checkpoint derivation are still absent. A green local matrix is not a decentralization claim.
 6. **The network is one operator.** One implementation, one host, one data source, zero public peers, and no independent attestation. V2 makes such a network *identifiable*. It does not make it *independent*.
 
 The next action is still not another local parameter change. It is a second party running a node and the artifacts in §18.2 that would let them.

@@ -37,8 +37,9 @@ BNKR strips all of that out as a sovereign, peer-to-peer digital cash network wi
 | **Halving Schedule** | Every `210,000` blocks (height-only; unchanged at V2) |
 | **Consensus** | SHA-256 Proof-of-Work (Auto-adjusting difficulty) |
 | **V2 Target Block Time** | `60` seconds (Era 1 remains frozen at `15` seconds) |
-| **V2 Activation Height** | `2026` |
+| **V2 Activation Height** | `5000` |
 | **Mainnet Checkpoint 1** | Height `731` — `000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8` |
+| **Mainnet Checkpoint 2** | Height `2500` — `000004f48c5efffd42058140ba6532eeff322a33871a030ce4aefb54bdc38dd7` |
 | **Signatures** | Ed25519 Client-Side Local Signing |
 | **Official Seed Node** | `https://banneker-coin.onrender.com` |
 
@@ -82,14 +83,14 @@ $env:BANNEKER_PEERS="https://banneker-coin.onrender.com"; npm start
 
 ### 3. Verify From Your Own Node — Trust Nothing
 
-Health must report `ok: true`, `accountsValid: true`, and a checkpoint digest. While your node is still below height 731, `checkpointState` is `NOT_YET_APPLICABLE`; once it has synced past the checkpoint it must be `APPLICABLE`.
+Health must report `ok: true`, `accountsValid: true`, and a checkpoint digest. `checkpointState` is `NOT_YET_APPLICABLE` until a node passes a checkpoint height; it becomes `APPLICABLE` after height `731`, and remains so after height `2500` when both anchors are in scope.
 
 ```bash
 curl -fsS http://127.0.0.1:4174/health \
   | jq '{ok, height, checkpointState, accountsValid, checkpointSetDigest}'
 ```
 
-Confirm the compiled activation parameters ahead of V2 Activation Height `2026`:
+Confirm the compiled activation parameters ahead of V2 Activation Height `5000`:
 
 ```bash
 curl -fsS http://127.0.0.1:4174/api/node \
@@ -107,6 +108,19 @@ Expected output:
 
 ```text
 000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8
+```
+
+Verify Mainnet Checkpoint 2 directly from the synced blocks:
+
+```bash
+curl -fsS 'http://127.0.0.1:4174/api/peer/blocks?from=2500&to=2500&page=0' \
+  | jq -r '.blocks[0].hash'
+```
+
+Expected output:
+
+```text
+000004f48c5efffd42058140ba6532eeff322a33871a030ce4aefb54bdc38dd7
 ```
 
 ### 4. Open Your Node Dashboard
