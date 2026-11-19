@@ -90,31 +90,58 @@ function parsePageHeight(value, name) {
 // The port is bound before any database work begins. Until this resolves,
 // /health and /api requests receive 503 INITIALIZING instead of taking the
 // process down with an unhandled Turso socket error.
+const BACKGROUND_RETRY_MS = 30_000;
 let ledger = null;
 let ledgerInitError = null;
+let ledgerRetryAt = null;
+let backgroundRetryTimer = null;
+let initializationInFlight = false;
 let shuttingDown = false;
 
-async function initializeLedger() {
+function stopBackgroundRetry() {
+  if (backgroundRetryTimer) clearTimeout(backgroundRetryTimer);
+  backgroundRetryTimer = null;
+  ledgerRetryAt = null;
+}
+
+function scheduleBackgroundRetry() {
+  if (shuttingDown || ledger || backgroundRetryTimer) return;
+  ledgerRetryAt = Date.now() + BACKGROUND_RETRY_MS;
+  backgroundRetryTimer = setTimeout(() => {
+    backgroundRetryTimer = null;
+    void initializeLedger({ background: true });
+  }, BACKGROUND_RETRY_MS);
+  backgroundRetryTimer.unref();
+  console.warn(`Ledger initialization failed; retrying in ${BACKGROUND_RETRY_MS / 1000}s.`);
+}
+
+async function initializeLedger({ background = false } = {}) {
+  if (initializationInFlight || ledger || shuttingDown) return;
+  initializationInFlight = true;
   try {
     ledger = await createLedgerWithRetry(dbPath, {}, {
       attempts: 10,
       maxDelayMs: 10_000,
-      label: 'Ledger initialization',
+      label: background ? 'Background ledger initialization' : 'Ledger initialization',
       onRetry: ({ attempt, attempts, delayMs, error }) => {
         console.warn(`Ledger initialization failed (attempt ${attempt}/${attempts}): ${error?.message || error}. Retrying in ${delayMs}ms...`);
       }
     });
     ledgerInitError = null;
+    stopBackgroundRetry();
     if (shuttingDown) {
       ledger.close();
       ledger = null;
       return;
     }
-    console.log('Ledger initialized.');
+    console.log(background ? 'Ledger initialized after background retry.' : 'Ledger initialized.');
     await startPeerSync();
   } catch (error) {
     ledgerInitError = error;
-    console.error(`Ledger initialization failed permanently: ${error?.message || error}`);
+    console.error(`${background ? 'Background ledger retry' : 'Ledger initialization'} failed after all attempts: ${error?.message || error}`);
+    scheduleBackgroundRetry();
+  } finally {
+    initializationInFlight = false;
   }
 }
 
@@ -167,9 +194,13 @@ app.use((req, res, next) => {
   if (ledger) return next();
   res.set('Cache-Control', 'no-store');
   if (ledgerInitError) {
+    const retryInSeconds = ledgerRetryAt === null
+      ? null
+      : Math.max(0, Math.ceil((ledgerRetryAt - Date.now()) / 1000));
     return res.status(503).json({
       ok: false,
       reason: 'INITIALIZATION_FAILED',
+      ...(retryInSeconds !== null ? { retryInSeconds } : {}),
       error: ledgerInitError?.message || 'Ledger initialization failed.'
     });
   }
@@ -656,6 +687,7 @@ peerSyncInterval.unref();
 
 function shutdown() {
   shuttingDown = true;
+  stopBackgroundRetry();
   clearInterval(peerSyncInterval);
   server.close(() => {
     if (ledger) ledger.close();

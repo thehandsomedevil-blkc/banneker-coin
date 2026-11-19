@@ -767,6 +767,54 @@ export function startupRetryDelayMs(attempt, maxDelayMs = 10_000) {
 }
 
 /**
+ * Node 24's undici fetch is more reliable against Turso over HTTPS than over
+ * the libsql scheme during a cold start. Keep every other URL byte-for-byte
+ * intact so file: databases and explicitly configured HTTPS endpoints are
+ * unaffected.
+ */
+export function normalizeTursoUrl(value) {
+  if (typeof value !== 'string' || value.length === 0) return value;
+  return value.replace(/^libsql:\/\//i, 'https://');
+}
+
+export const BLOCK_LOAD_PAGE_SIZE = 250;
+
+/**
+ * Reads the full block table in bounded pages. A stable upper bound is captured
+ * before paging so a concurrent tip extension cannot shift OFFSET windows and
+ * duplicate or skip rows. Small pages keep a cold Turso socket alive instead of
+ * asking it to stream the entire chain in one response.
+ */
+export async function fetchPagedBlockRows(client, {
+  pageSize = BLOCK_LOAD_PAGE_SIZE,
+  maxHeight = null
+} = {}) {
+  if (!Number.isSafeInteger(pageSize) || pageSize < 1) {
+    throw new Error('Block load page size must be a positive safe integer.');
+  }
+  if (maxHeight !== null && (!Number.isSafeInteger(maxHeight) || maxHeight < 0)) {
+    throw new Error('Block load upper bound must be a non-negative safe integer.');
+  }
+
+  const bounded = maxHeight !== null;
+  const where = bounded ? 'WHERE height <= ?' : '';
+  const rows = [];
+  let offset = 0;
+  for (;;) {
+    const args = bounded ? [maxHeight, pageSize, offset] : [pageSize, offset];
+    const result = await client.execute({
+      sql: `SELECT height, timestamp, hash, miner, tx_count, json, chain_work FROM blocks ${where} ORDER BY height LIMIT ? OFFSET ?`.replace(/\s+/g, ' ').trim(),
+      args
+    });
+    const page = result?.rows ?? [];
+    rows.push(...page);
+    if (page.length < pageSize) break;
+    offset += page.length;
+  }
+  return rows;
+}
+
+/**
  * Creates and validates a ledger with fresh clients on every attempt. A failed
  * candidate is closed before the next attempt so no half-open socket survives.
  * The returned ledger has already passed the startup integrity check.
@@ -865,10 +913,14 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
   const checkpoints = checkpointManifest.checkpoints;
   const checkpointsByHeight = new Map(checkpoints.map(checkpoint => [checkpoint.height, checkpoint]));
 
-  const tursoUrl = process.env.TURSO_DATABASE_URL;
+  const tursoUrl = envValue('TURSO_DATABASE_URL');
+  // Keep an unset token as undefined; the HTTP client omits the Authorization
+  // header only for undefined, while null would be sent as "Bearer null".
   const tursoToken = process.env.TURSO_AUTH_TOKEN;
-  
-  const url = tursoUrl || `file:${databasePath}`;
+
+  // libsql:// is normalized to https:// so Node 24's undici HTTP transport
+  // handles the remote endpoint during Turso cold starts.
+  const url = normalizeTursoUrl(tursoUrl) || `file:${databasePath}`;
   const client = createClient({ url, authToken: tursoToken });
 
   // All chain-state mutations (block acceptance, mempool admission, and chain
@@ -948,15 +1000,15 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
   }
 
   async function getBlockRows() {
-    const result = await client.execute(
-      "SELECT height, timestamp, hash, miner, tx_count, json, chain_work FROM blocks ORDER BY height"
-    );
-    return result.rows;
+    // Capture the tip first so OFFSET paging sees a consistent upper bound even
+    // if a peer sync extends the chain while a full replay is in progress.
+    const tipHeight = await getTipHeight();
+    return fetchPagedBlockRows(client, { maxHeight: tipHeight });
   }
 
   async function getBlocks() {
-    const result = await client.execute("SELECT json FROM blocks ORDER BY height");
-    return result.rows.map(row => JSON.parse(row.json));
+    const rows = await getBlockRows();
+    return rows.map(row => JSON.parse(row.json));
   }
 
   /**

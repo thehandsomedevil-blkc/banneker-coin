@@ -13,6 +13,8 @@ import {
   parseAmount,
   NETWORK_ID,
   MAX_REORG_DEPTH,
+  normalizeTursoUrl,
+  fetchPagedBlockRows,
   verifyTransaction
 } from './ledger.js';
 
@@ -880,4 +882,43 @@ test('mining templates exclude invalid, stale, and overdrawn mempool entries', a
   } finally {
     ledger.close();
   }
+});
+
+test('Turso libsql URLs normalize to HTTPS without changing other transports', () => {
+  assert.equal(normalizeTursoUrl('libsql://db.turso.io'), 'https://db.turso.io');
+  assert.equal(
+    normalizeTursoUrl('libsql://db.turso.io:443/path?x=1'),
+    'https://db.turso.io:443/path?x=1'
+  );
+  assert.equal(normalizeTursoUrl('LIBSQL://db.turso.io'), 'https://db.turso.io');
+  assert.equal(normalizeTursoUrl('https://db.turso.io'), 'https://db.turso.io');
+  assert.equal(normalizeTursoUrl('file:local.db'), 'file:local.db');
+  assert.equal(normalizeTursoUrl(''), '');
+  assert.equal(normalizeTursoUrl(undefined), undefined);
+});
+
+test('full block loads use bounded, stable pages instead of one massive query', async () => {
+  const rows = Array.from({ length: 505 }, (_unused, height) => ({
+    height,
+    json: JSON.stringify({ height })
+  }));
+  const calls = [];
+  const client = {
+    async execute({ sql, args }) {
+      calls.push({ sql, args });
+      const [limit, offset] = args.slice(-2);
+      return { rows: rows.slice(offset, offset + limit) };
+    }
+  };
+
+  const loaded = await fetchPagedBlockRows(client, { pageSize: 250, maxHeight: 504 });
+
+  assert.equal(loaded.length, rows.length);
+  assert.deepEqual(calls.map(call => call.args), [
+    [504, 250, 0],
+    [504, 250, 250],
+    [504, 250, 500]
+  ]);
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].sql, /WHERE height <= \? ORDER BY height LIMIT \? OFFSET \?/);
 });
