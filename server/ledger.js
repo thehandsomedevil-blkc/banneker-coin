@@ -803,6 +803,33 @@ export function resolveStorageTarget(env = process.env, databasePath = 'blackcoi
   return Object.freeze({ url, remote: true, token });
 }
 
+const REMOTE_GENESIS_FLAG = 'ALLOW_REMOTE_GENESIS';
+const SEED_PEER_ENV_NAMES = [
+  'SEED_PEERS',
+  'PEERS',
+  'BANNEKER_PEERS',
+  'BLACKCOIN_PEERS'
+];
+
+function envFlag(value) {
+  return /^(?:1|true|yes|on)$/i.test(String(value ?? '').trim());
+}
+
+/**
+ * A brand-new remote database may be bootstrapped only when the node has an
+ * explicit way to obtain the rest of the chain. An unset/empty seed list keeps
+ * the historical fail-closed behaviour; the explicit flag is an operator
+ * override for controlled environments.
+ */
+export function remoteGenesisSeedingAllowed(env = process.env) {
+  if (envFlag(env?.[REMOTE_GENESIS_FLAG])) return true;
+  return SEED_PEER_ENV_NAMES.some(name =>
+    String(env?.[name] ?? '')
+      .split(',')
+      .some(value => value.trim().length > 0)
+  );
+}
+
 export const BLOCK_LOAD_PAGE_SIZE = 250;
 
 /**
@@ -943,7 +970,12 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
   // remote endpoint without a token is a startup error rather than an anonymous
   // connection (F-06).
   const storage = resolveStorageTarget(env, databasePath);
-  const client = createClient({ url: storage.url, authToken: storage.token });
+  // Programmatic client injection is used by unit tests to simulate a clean,
+  // empty remote without a live Turso endpoint. Production never supplies it.
+  const clientFactory = typeof options.clientFactory === 'function'
+    ? options.clientFactory
+    : createClient;
+  const client = await clientFactory({ url: storage.url, authToken: storage.token });
 
   // All chain-state mutations (block acceptance, mempool admission, and chain
   // replacement) pass through this queue. It serializes conflicting writers and
@@ -1010,21 +1042,36 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       await client.execute("ALTER TABLE blocks ADD COLUMN chain_work TEXT NOT NULL DEFAULT '0'");
     }
 
-    // Genesis is seeded only for a local development database. A configured
-    // remote store that is empty is an error: auto-genesis there would fork the
-    // node onto a brand-new height-0 chain.
-    const genesisCheck = await client.execute("SELECT 1 FROM blocks WHERE height = 0");
-    if (genesisCheck.rows.length === 0) {
-      if (storage.remote) {
+    // Only a *clean, completely empty* remote may be bootstrapped, and only
+    // when the node has a seed peer (or an explicit operator override) to sync
+    // the remainder of the chain from. Any other remote state fails closed.
+    const blockCountResult = await client.execute("SELECT COUNT(*) AS count FROM blocks");
+    const blockCount = Number(blockCountResult.rows[0]?.count ?? 0);
+    const remoteHasBlocksButNoGenesis = storage.remote && blockCount > 0
+      ? (await client.execute("SELECT 1 FROM blocks WHERE height = 0")).rows.length === 0
+      : false;
+
+    if (remoteHasBlocksButNoGenesis) {
+      throw Object.assign(
+        new Error('Configured remote storage has blocks but no genesis block; refusing to repair it automatically.'),
+        { code: 'REMOTE_STORAGE_GENESIS_MISSING' }
+      );
+    }
+
+    if (blockCount === 0) {
+      if (storage.remote && !remoteGenesisSeedingAllowed(env)) {
         throw Object.assign(
-          new Error('Configured remote storage contains no genesis block; refusing to auto-generate a new chain.'),
+          new Error('Configured remote storage contains no genesis block and no seed peer is configured; refusing to auto-generate a new chain.'),
           { code: 'REMOTE_STORAGE_EMPTY' }
         );
       }
       const genesis = genesisBlock();
+      if (genesis.hash !== GENESIS_HASH) {
+        throw new Error('Compiled genesis hash does not match the deterministic genesis block; refusing to seed storage.');
+      }
       await client.execute({
         sql: "INSERT INTO blocks(height, timestamp, hash, miner, tx_count, json, chain_work) VALUES (?, ?, ?, ?, ?, ?, ?)",
-        args: [0, GENESIS_TIMESTAMP, genesis.hash, null, 0, JSON.stringify(genesis), '0']
+        args: [0, GENESIS_TIMESTAMP, GENESIS_HASH, null, 0, JSON.stringify(genesis), '0']
       });
     }
   }
@@ -1033,7 +1080,9 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     await initializeSchema();
   } catch (error) {
     client.close();
-    if (storage.remote && error?.code !== 'REMOTE_STORAGE_EMPTY') {
+    if (storage.remote &&
+        error?.code !== 'REMOTE_STORAGE_EMPTY' &&
+        error?.code !== 'REMOTE_STORAGE_GENESIS_MISSING') {
       // Error text is deliberately generic: transport errors may echo the
       // connection URL and the auth token must never surface in logs or APIs.
       const fatal = new Error('Configured remote storage could not be initialized; refusing to start an empty local chain.');
