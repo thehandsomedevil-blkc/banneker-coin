@@ -131,6 +131,30 @@ function IconButton({ icon: Icon, children, ...props }) {
   </button>;
 }
 
+function CoinEmblem() {
+  const [pinned, setPinned] = useState(false);
+  const [hovered, setHovered] = useState(false);
+  const flipped = pinned || hovered;
+
+  return <button
+    type="button"
+    className={`coin-emblem${flipped ? ' is-flipped' : ''}`}
+    onMouseEnter={() => setHovered(true)}
+    onMouseLeave={() => setHovered(false)}
+    onClick={() => setPinned(value => !value)}
+    onFocus={() => setHovered(true)}
+    onBlur={() => setHovered(false)}
+    aria-label="Flip the BNKR coin to see its reverse"
+    aria-pressed={pinned}
+    title="Flip coin"
+  >
+    <span className="coin-emblem__inner">
+      <img className="coin-emblem__face coin-emblem__face--front" src="/bnkr-coin-front.png" alt="" draggable="false" />
+      <img className="coin-emblem__face coin-emblem__face--back" src="/bnkr-coin-back.png" alt="" draggable="false" />
+    </span>
+  </button>;
+}
+
 function SectionTitle({ icon: Icon, title, detail, action }) {
   return <div className="mb-5 flex items-center justify-between gap-3">
     <div className="flex items-center gap-3">
@@ -513,9 +537,7 @@ export default function App() {
       <div className="mx-auto max-w-[1440px] px-5 py-5 sm:px-8 lg:px-12">
         <div className="flex flex-wrap items-center justify-between gap-5">
           <div className="flex items-center gap-4">
-            <div className="relative flex h-11 w-11 items-center justify-center rounded-full border border-gold/60 bg-[#d4af370b] text-gold">
-              <span className="font-display text-2xl font-semibold">B</span><span className="absolute -bottom-1 -right-1 h-3 w-3 rounded-full border-2 border-obsidian bg-gold" />
-            </div>
+            <CoinEmblem />
             <div><p className="font-display text-xl font-semibold tracking-[.09em] text-[#eee8d8]">THE BANNEKER COIN</p><p className="mt-0.5 text-[9px] uppercase tracking-[.25em] text-[#77756e]">An open monetary protocol <span className="px-1 text-gold">·</span> BNKR</p></div>
           </div>
           <div className="flex items-center gap-3">

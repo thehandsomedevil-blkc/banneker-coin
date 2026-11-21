@@ -47,6 +47,48 @@ button { cursor: pointer; }
 .field:focus { border-color: var(--gold); }
 .field::placeholder { color: #68665f; }
 .gold-rule { background: linear-gradient(90deg, transparent, rgba(212,175,55,.45), transparent); }
+
+/* Header coin: fixed 44px box so hover/click never shifts the layout. */
+.coin-emblem {
+  flex: 0 0 44px;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  perspective: 600px;
+  transition: box-shadow .3s ease, filter .3s ease;
+}
+.coin-emblem:hover,
+.coin-emblem:focus-visible {
+  box-shadow: 0 0 0 1px rgba(212, 175, 55, .65), 0 0 18px rgba(212, 175, 55, .32);
+  filter: drop-shadow(0 0 6px rgba(212, 175, 55, .28));
+}
+.coin-emblem:focus-visible { outline: 2px solid var(--gold); outline-offset: 3px; }
+.coin-emblem__inner {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  transform-style: preserve-3d;
+  transition: transform .75s cubic-bezier(.2, .7, .2, 1);
+  will-change: transform;
+}
+.coin-emblem.is-flipped .coin-emblem__inner { transform: rotateY(180deg); }
+.coin-emblem__face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 50%;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  pointer-events: none;
+  user-select: none;
+}
+.coin-emblem__face--back { transform: rotateY(180deg); }
 .scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
 .scrollbar::-webkit-scrollbar-thumb { background: #403a29; border-radius: 6px; }
 
