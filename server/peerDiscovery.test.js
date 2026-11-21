@@ -59,6 +59,7 @@ function startNode({ directory, name, seedPeers, port: requestedPort, extraEnv =
         ALLOW_LOCAL_PEERS: 'true',
         NODE_ENV: 'test',
         PEER_REGISTRATION_RETRY_MS: '300000',
+        PEER_MAINTENANCE_INTERVAL_MS: '250',
         ...extraEnv
       },
       stdio: ['ignore', 'pipe', 'pipe']
@@ -268,6 +269,61 @@ test('late peer self-heals reverse registration without restarting the booted no
     } finally {
       if (nodeA) await nodeA.stop();
       if (nodeB) await nodeB.stop();
+      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
+    }
+  });
+
+test('node learns a transitive peer through a bridge and closes the full mesh',
+  { timeout: 120_000 }, async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'bnkr-peer-transitive-'));
+    let nodeA;
+    let nodeB;
+    let nodeC;
+    try {
+      // A is the canonical-like node. It only knows B. C only knows B. B is
+      // the bridge that already has both edges before transitive discovery.
+      nodeA = await startNode({ directory, name: 'node-a', seedPeers: '' });
+      nodeC = await startNode({ directory, name: 'node-c', seedPeers: '' });
+      await Promise.all([nodeA.ready(), nodeC.ready()]);
+
+      nodeB = await startNode({
+        directory,
+        name: 'node-b-bridge',
+        seedPeers: `${nodeA.origin},${nodeC.origin}`
+      });
+      await nodeB.ready();
+
+      await waitFor('bridge edges exist before discovery', async () => {
+        const [peersAtA, peersAtB, peersAtC] = await Promise.all([
+          getJson(nodeA.origin, '/api/peers'),
+          getJson(nodeB.origin, '/api/peers'),
+          getJson(nodeC.origin, '/api/peers')
+        ]);
+        return peersAtA.peers.some(peer => peer.url === nodeB.origin) &&
+          peersAtB.peers.some(peer => peer.url === nodeA.origin) &&
+          peersAtB.peers.some(peer => peer.url === nodeC.origin) &&
+          peersAtC.peers.some(peer => peer.url === nodeB.origin);
+      }, 30_000);
+
+      await waitFor('A learns C through B and C accepts the reverse edge', async () => {
+        const [infoA, infoB, infoC, peersAtA, peersAtC] = await Promise.all([
+          getJson(nodeA.origin, '/api/node'),
+          getJson(nodeB.origin, '/api/node'),
+          getJson(nodeC.origin, '/api/node'),
+          getJson(nodeA.origin, '/api/peers'),
+          getJson(nodeC.origin, '/api/peers')
+        ]);
+        return infoA.peers === 2 && infoB.peers === 2 && infoC.peers === 2 &&
+          peersAtA.peers.some(peer => peer.url === nodeC.origin) &&
+          peersAtC.peers.some(peer => peer.url === nodeA.origin);
+      }, 30_000);
+
+      await waitFor('transitive discovery log', async () =>
+        nodeA.output().includes(`Discovered peer ${nodeC.origin} via ${nodeB.origin}`), 10_000);
+    } finally {
+      if (nodeA) await nodeA.stop();
+      if (nodeB) await nodeB.stop();
+      if (nodeC) await nodeC.stop();
       await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
     }
   });

@@ -68,16 +68,25 @@ if (process.env.NODE_ENV === 'production' && !allowPrivatePeers && !canAdvertise
   console.warn('PUBLIC_URL is missing or not a public HTTPS origin; peer registration is disabled. Set PUBLIC_URL to this node\'s external URL.');
 }
 
+function positiveIntEnv(name, fallback) {
+  const parsed = Number.parseInt(String(process.env[name] || '').trim(), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : fallback;
+}
+
 // Peer tables are independent per node, so a failed startup POST leaves a
-// one-way edge until something retries. The periodic loop below re-registers
-// with seeds and known peers on a per-peer cooldown. The env override exists
-// for tests and slow environments; production defaults to five minutes.
-const registrationRetryMs = (() => {
-  const parsed = Number.parseInt(String(process.env.PEER_REGISTRATION_RETRY_MS || '').trim(), 10);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 300_000;
-})();
+// one-way edge until something retries. The periodic loop re-registers with
+// seeds and known peers on a per-peer cooldown, and also asks known peers for
+// the peers they know so missing transitive edges can be learned. The env
+// overrides exist for tests and slow environments; production defaults are
+// five minutes and 30 seconds respectively.
+const registrationRetryMs = positiveIntEnv('PEER_REGISTRATION_RETRY_MS', 300_000);
+const peerMaintenanceIntervalMs = positiveIntEnv('PEER_MAINTENANCE_INTERVAL_MS', 30_000);
+const maxDiscoveredPeers = positiveIntEnv('MAX_DISCOVERED_PEERS', 32);
 const registrationLastAttempt = new Map();
 const registrationInFlight = new Set();
+const discoveryInFlight = new Set();
+const verifiedDiscoveryOrigins = new Set();
+const MAX_PEER_LIST_RESPONSE_BYTES = 64 * 1024;
 
 // Build identity is resolved from platform env vars or the checked-out git HEAD
 // and reported verbatim by /api/node and /health. No secrets are included.
@@ -401,6 +410,22 @@ function seedPeerOrigins() {
   return origins;
 }
 
+/**
+ * A remote origin is only usable as a peer when it advertises the same
+ * compiled network identity. This is shared by inbound registration and
+ * transitive discovery so neither path can add a lookalike service.
+ */
+function isCompatiblePeerInfo(info) {
+  const identity = ledger.getChainIdentity();
+  return info?.name === 'The Banneker Coin' &&
+    info?.ticker === 'BNKR' &&
+    info?.networkId === identity.networkId &&
+    info?.genesisHash === identity.genesisHash &&
+    info?.protocolVersion === identity.protocolVersion &&
+    info?.checkpointSetDigest === identity.checkpointSetDigest &&
+    info?.v2ActivationHeight === identity.v2ActivationHeight;
+}
+
 async function acceptSubmission(req, kind, accept) {
   try {
     return await accept();
@@ -474,6 +499,82 @@ async function bootstrapPeers() {
       continue;
     }
     await registerWithPeer(origin);
+  }
+}
+
+/**
+ * Learns peers that our peers already know. This closes gaps such as
+ * canonical ↔ node-b ↔ black without dashboard changes: canonical asks
+ * node-b for its peer table, verifies the returned origin directly, and adds
+ * it locally. The retry pass that follows registers with the new peer, which
+ * creates the missing reverse edge on that peer.
+ *
+ * Discovery is deliberately narrow: origins come only from peers we already
+ * trust enough to sync from, are normalized as bare origins, screened against
+ * SSRF targets, and must serve a compatible /api/node identity before use.
+ */
+async function discoverTransitivePeers() {
+  if (!ledger || !canAdvertisePublicly) return;
+
+  let knownPeers;
+  try {
+    knownPeers = await ledger.getPeers();
+  } catch (error) {
+    console.warn(`Peer discovery skipped: unable to read peers (${error?.message || error})`);
+    return;
+  }
+
+  const known = new Set(knownPeers.map(peer => peer.url));
+  let added = 0;
+
+  for (const source of known) {
+    if (added >= maxDiscoveredPeers) break;
+    if (isSelfPeer(source) || discoveryInFlight.has(source)) continue;
+
+    discoveryInFlight.add(source);
+    try {
+      await assertPeerHostAllowed(new URL(source).hostname, { allowPrivate: allowPrivatePeers });
+      const payload = await fetchPeerJson(`${source}/api/peers`, {
+        maxBytes: MAX_PEER_LIST_RESPONSE_BYTES,
+        timeoutMs: 5_000,
+        allowPrivate: allowPrivatePeers
+      });
+      const entries = Array.isArray(payload) ? payload : payload?.peers;
+      if (!Array.isArray(entries)) throw new Error('Peer list is not an array.');
+
+      for (const entry of entries.slice(0, maxDiscoveredPeers)) {
+        if (added >= maxDiscoveredPeers) break;
+        const value = typeof entry === 'string' ? entry : entry?.url;
+        if (typeof value !== 'string' || !value.trim()) continue;
+
+        try {
+          const origin = cleanPeerUrl(value);
+          if (isSelfPeer(origin) || origin === source || known.has(origin) ||
+            verifiedDiscoveryOrigins.has(origin)) continue;
+          if (!allowPrivatePeers && !isPublicAdvertisedOrigin(origin)) {
+            throw new Error('discovered peer is not a public HTTPS origin');
+          }
+          await assertPeerHostAllowed(new URL(origin).hostname, { allowPrivate: allowPrivatePeers });
+          const info = await fetchPeerJson(`${origin}/api/node`, {
+            maxBytes: PEER_LIMITS.maxPeerNodeInfoBytes,
+            timeoutMs: 5_000,
+            allowPrivate: allowPrivatePeers
+          });
+          if (!isCompatiblePeerInfo(info)) throw new Error('incompatible BNKR peer identity');
+          await ledger.addPeer(origin);
+          verifiedDiscoveryOrigins.add(origin);
+          known.add(origin);
+          added += 1;
+          console.log(`Discovered peer ${origin} via ${source}.`);
+        } catch (error) {
+          console.warn(`Skipping discovered peer ${value}: ${error?.message || error}`);
+        }
+      }
+    } catch (error) {
+      console.warn(`Peer discovery from ${source} failed: ${error?.message || error}`);
+    } finally {
+      discoveryInFlight.delete(source);
+    }
   }
 }
 
@@ -751,7 +852,7 @@ app.post('/api/peers', asyncRoute(async (req, res) => {
     );
     throw error;
   }
-  if (info.name !== 'The Banneker Coin' || info.ticker !== 'BNKR') {
+  if (!isCompatiblePeerInfo(info)) {
     await faultRecorder.recordMany(
       registrationFaultIdentifiers(req, peer),
       'peer identity mismatch',
@@ -884,6 +985,7 @@ async function startPeerSync() {
     // Seed registration first: the remote learns about us, then we pull its
     // chain. Both halves are needed for a symmetric peer relationship.
     await bootstrapPeers();
+    await discoverTransitivePeers();
     const peers = await ledger.getPeers();
     if (peers.length) void synchronizePeers().catch(error => console.warn(`Startup peer sync failed: ${error?.message || error}`));
   } catch (error) {
@@ -899,17 +1001,21 @@ const server = app.listen(port, '0.0.0.0', () => {
   void initializeLedger();
 });
 
+let peerMaintenanceRunning = false;
 const peerSyncInterval = setInterval(async () => {
-  if (!ledger) return;
-  void retryPeerRegistrations().catch(error =>
-    console.warn(`Periodic peer registration failed: ${error?.message || error}`));
+  if (!ledger || peerMaintenanceRunning) return;
+  peerMaintenanceRunning = true;
   try {
+    await discoverTransitivePeers();
+    await retryPeerRegistrations();
     const peers = await ledger.getPeers();
     if (peers.length) void synchronizePeers().catch(error => console.warn(`Periodic peer sync failed: ${error?.message || error}`));
   } catch (error) {
-    console.warn(`Periodic peer discovery failed: ${error?.message || error}`);
+    console.warn(`Periodic peer maintenance failed: ${error?.message || error}`);
+  } finally {
+    peerMaintenanceRunning = false;
   }
-}, 30_000);
+}, peerMaintenanceIntervalMs);
 peerSyncInterval.unref();
 
 function shutdown() {
