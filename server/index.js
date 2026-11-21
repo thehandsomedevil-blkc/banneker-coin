@@ -68,6 +68,17 @@ if (process.env.NODE_ENV === 'production' && !allowPrivatePeers && !canAdvertise
   console.warn('PUBLIC_URL is missing or not a public HTTPS origin; peer registration is disabled. Set PUBLIC_URL to this node\'s external URL.');
 }
 
+// Peer tables are independent per node, so a failed startup POST leaves a
+// one-way edge until something retries. The periodic loop below re-registers
+// with seeds and known peers on a per-peer cooldown. The env override exists
+// for tests and slow environments; production defaults to five minutes.
+const registrationRetryMs = (() => {
+  const parsed = Number.parseInt(String(process.env.PEER_REGISTRATION_RETRY_MS || '').trim(), 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 300_000;
+})();
+const registrationLastAttempt = new Map();
+const registrationInFlight = new Set();
+
 // Build identity is resolved from platform env vars or the checked-out git HEAD
 // and reported verbatim by /api/node and /health. No secrets are included.
 const { buildId, sourceCommit } = resolveBuildIdentity();
@@ -370,6 +381,26 @@ app.use('/api/peer', async (error, req, _res, next) => {
 
 const cleanPeerUrl = value => parsePeerUrl(value).origin;
 
+let cachedSeedOrigins = null;
+function seedPeerOrigins() {
+  if (cachedSeedOrigins) return cachedSeedOrigins;
+  const origins = [];
+  for (const seed of configuredPeers) {
+    try {
+      const origin = cleanPeerUrl(seed);
+      if (isSelfPeer(origin)) {
+        console.warn(`Ignoring self seed ${seed}.`);
+        continue;
+      }
+      origins.push(origin);
+    } catch (error) {
+      console.warn(`Ignoring invalid seed ${seed}: ${error?.message || error}`);
+    }
+  }
+  cachedSeedOrigins = origins;
+  return origins;
+}
+
 async function acceptSubmission(req, kind, accept) {
   try {
     return await accept();
@@ -406,11 +437,13 @@ async function registerWithPeer(peer) {
       });
       try { await response.body?.cancel(); } catch {}
       if (!response.ok) throw new Error(`Peer registration returned HTTP ${response.status}.`);
+      registrationLastAttempt.set(peer, Date.now());
       await ledger.updatePeer(peer);
       console.log(`Registered with peer ${peer}.`);
       return true;
     } catch (error) {
       if (attempt >= 3) {
+        registrationLastAttempt.set(peer, Date.now());
         try { await ledger.updatePeer(peer, error.message); } catch {}
         console.warn(`Could not register with peer ${peer}: ${error.message}`);
         return false;
@@ -441,6 +474,47 @@ async function bootstrapPeers() {
       continue;
     }
     await registerWithPeer(origin);
+  }
+}
+
+/**
+ * Periodically re-register with configured seeds and known peers. A remote
+ * peer's table is an independent database, so a startup POST that failed while
+ * that peer was booting leaves a one-way edge. The per-peer cooldown keeps the
+ * retry cheap while allowing the mesh to heal without a manual redeploy.
+ */
+async function retryPeerRegistrations() {
+  if (!ledger || !canAdvertisePublicly) return;
+
+  let knownPeers;
+  try {
+    knownPeers = await ledger.getPeers();
+  } catch (error) {
+    console.warn(`Registration retry skipped: unable to read peers (${error?.message || error})`);
+    return;
+  }
+
+  const knownByUrl = new Map(knownPeers.map(peer => [peer.url, peer]));
+  const candidates = [...new Set([...seedPeerOrigins(), ...knownByUrl.keys()])];
+  const now = Date.now();
+
+  for (const peer of candidates) {
+    if (isSelfPeer(peer) || registrationInFlight.has(peer)) continue;
+    const lastAttempt = registrationLastAttempt.get(peer) || 0;
+    if (now - lastAttempt < registrationRetryMs) continue;
+
+    registrationInFlight.add(peer);
+    registrationLastAttempt.set(peer, now);
+    try {
+      await assertPeerHostAllowed(new URL(peer).hostname, { allowPrivate: allowPrivatePeers });
+      if (!knownByUrl.has(peer)) await ledger.addPeer(peer);
+      await registerWithPeer(peer);
+    } catch (error) {
+      try { await ledger.updatePeer(peer, error?.message || String(error)); } catch {}
+      console.warn(`Registration retry for ${peer}: ${error?.message || error}`);
+    } finally {
+      registrationInFlight.delete(peer);
+    }
   }
 }
 
@@ -827,6 +901,8 @@ const server = app.listen(port, '0.0.0.0', () => {
 
 const peerSyncInterval = setInterval(async () => {
   if (!ledger) return;
+  void retryPeerRegistrations().catch(error =>
+    console.warn(`Periodic peer registration failed: ${error?.message || error}`));
   try {
     const peers = await ledger.getPeers();
     if (peers.length) void synchronizePeers().catch(error => console.warn(`Periodic peer sync failed: ${error?.message || error}`));

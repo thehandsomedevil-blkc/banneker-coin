@@ -42,9 +42,9 @@ async function waitFor(label, predicate, timeoutMs = 20_000) {
   throw new Error(`${label} timed out${lastError ? `: ${lastError.message}` : ''}`);
 }
 
-function startNode({ directory, name, seedPeers }) {
+function startNode({ directory, name, seedPeers, port: requestedPort, extraEnv = {} }) {
   return (async () => {
-    const port = await unusedPort();
+    const port = requestedPort ?? await unusedPort();
     const origin = `http://127.0.0.1:${port}`;
     const child = spawn(process.execPath, ['server/index.js'], {
       cwd: projectRoot,
@@ -57,7 +57,9 @@ function startNode({ directory, name, seedPeers }) {
         SEED_PEERS: seedPeers,
         BANNEKER_PEERS: '',
         ALLOW_LOCAL_PEERS: 'true',
-        NODE_ENV: 'test'
+        NODE_ENV: 'test',
+        PEER_REGISTRATION_RETRY_MS: '300000',
+        ...extraEnv
       },
       stdio: ['ignore', 'pipe', 'pipe']
     });
@@ -213,6 +215,59 @@ test('Node B bootstraps from Node A with bidirectional registration and chain sy
     } finally {
       if (nodeB) await nodeB.stop();
       if (nodeA) await nodeA.stop();
+      await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
+    }
+  });
+
+test('late peer self-heals reverse registration without restarting the booted node',
+  { timeout: 120_000 }, async () => {
+    const directory = await mkdtemp(path.join(tmpdir(), 'bnkr-peer-retry-'));
+    const nodeAPort = await unusedPort();
+    const nodeAOrigin = `http://127.0.0.1:${nodeAPort}`;
+    let nodeA;
+    let nodeB;
+    try {
+      // B boots first with a seed that is not listening yet. Its startup POST
+      // fails, but the seed is still stored locally with a lastError marker.
+      nodeB = await startNode({
+        directory,
+        name: 'node-b-early',
+        seedPeers: nodeAOrigin,
+        extraEnv: { PEER_REGISTRATION_RETRY_MS: '200' }
+      });
+      await nodeB.ready();
+
+      await waitFor('initial registration failure is recorded', async () => {
+        const peersAtB = await getJson(nodeB.origin, '/api/peers');
+        const seed = peersAtB.peers.find(peer => peer.url === nodeAOrigin);
+        return Boolean(seed && seed.lastError);
+      }, 30_000);
+
+      const before = await getJson(nodeB.origin, '/api/node');
+      assert.equal(before.peers, 1, 'B should keep its seed locally after failed registration');
+
+      // A starts later. B is never restarted.
+      nodeA = await startNode({ directory, name: 'node-a-late', seedPeers: '', port: nodeAPort });
+      await nodeA.ready();
+
+      await waitFor('periodic retry completes bidirectional registration', async () => {
+        const [infoA, infoB, peersAtA, peersAtB] = await Promise.all([
+          getJson(nodeA.origin, '/api/node'),
+          getJson(nodeB.origin, '/api/node'),
+          getJson(nodeA.origin, '/api/peers'),
+          getJson(nodeB.origin, '/api/peers')
+        ]);
+        return infoA.peers === 1 &&
+          infoB.peers === 1 &&
+          peersAtA.peers.some(peer => peer.url === nodeB.origin) &&
+          peersAtB.peers.some(peer => peer.url === nodeAOrigin && peer.lastError === null);
+      }, 30_000);
+
+      await waitFor('registration retry log', async () =>
+        nodeB.output().includes(`Registered with peer ${nodeA.origin}`), 10_000);
+    } finally {
+      if (nodeA) await nodeA.stop();
+      if (nodeB) await nodeB.stop();
       await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }).catch(() => {});
     }
   });
