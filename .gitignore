@@ -2,6 +2,7 @@ node_modules/
 dist/
 .env
 .env.*
+!.env.node-b.example
 
 # Local chain databases and SQLite sidecars. Never commit ledger state.
 *.db
@@ -15,3 +16,4 @@ BNKR_PHASE1_REVIEW_*.md
 BNKR_PROTOCOL_V2_INDEPENDENT_REVIEW.md
 BNKR_NETWORK_IDENTITY_PROTOCOL_V2_SPECIFICATION.md
 SECURITY_AUDIT_*.md
+BNKR_COMPLETE_INDEPENDENT_FORENSIC_AUDIT.md

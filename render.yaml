@@ -1,0 +1,34 @@
+# Render Blueprint for a SECOND independent BNKR node (Node B).
+# Create a new Blueprint from this file in Render; do not reconfigure the
+# existing banneker-coin service with it. Render injects PORT automatically.
+
+services:
+  - type: web
+    name: banneker-coin-node-b
+    runtime: node
+    plan: starter
+    region: oregon
+    branch: main
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    healthCheckPath: /health
+    disk:
+      name: bnkr-node-b-data
+      mountPath: /var/lib/bnkr
+      sizeGB: 1
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: DB_PATH
+        value: /var/lib/bnkr/node-b.db
+      # Change this to the real Render URL assigned to Node B.
+      - key: PUBLIC_URL
+        value: https://bnkr-node-b.onrender.com
+      # Seed A registers B via POST /api/peers, making discovery bidirectional.
+      - key: SEED_PEERS
+        value: https://banneker-coin.onrender.com
+      # Never enable private peers in production.
+      - key: ALLOW_LOCAL_PEERS
+        value: "false"
+      - key: NODE_ENV
+        value: production

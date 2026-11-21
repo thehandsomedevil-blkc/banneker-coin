@@ -36,13 +36,26 @@ import {
 const app = express();
 const port = Number(process.env.PORT || 4174);
 const host = process.env.HOST || '0.0.0.0'; // Changed from 127.0.0.1 for production
-const publicUrl = process.env.PUBLIC_URL || `http://${host}:${port}`;
-const dbPath = process.env.BANNEKER_DB || process.env.BLACKCOIN_DB || path.resolve(process.cwd(), 'bannekercoin.db');
+
+// The URL this node advertises to peers. PUBLIC_URL is canonical; SELF_URL and
+// NODE_URL are accepted so a second node needs no code edits when the platform
+// uses a different variable name.
+const advertisedUrl = process.env.PUBLIC_URL || process.env.SELF_URL || process.env.NODE_URL;
+const publicUrl = (advertisedUrl && String(advertisedUrl).trim())
+  ? String(advertisedUrl).trim().replace(/\/+$/, '')
+  : `http://${host}:${port}`;
+
+// DB_PATH is the neutral alias for a second node; the legacy BANNEKER_DB and
+// BLACKCOIN_DB names keep working. Every .db file stays outside version control.
+const dbPath = process.env.BANNEKER_DB || process.env.BLACKCOIN_DB || process.env.DB_PATH ||
+  path.resolve(process.cwd(), 'bannekercoin.db');
 
 // Explicit local-testing escape hatch for the peer SSRF screen. It relaxes
 // loopback/private/link-local ranges only; multicast and unspecified ranges
 // stay blocked. It must never be set on a production node.
-const allowPrivatePeers = /^(?:1|true|yes|on)$/i.test(String(process.env.BANNEKER_ALLOW_PRIVATE_PEERS || '').trim());
+const allowPrivatePeers = /^(?:1|true|yes|on)$/i.test(String(
+  process.env.ALLOW_LOCAL_PEERS || process.env.BANNEKER_ALLOW_PRIVATE_PEERS || ''
+).trim());
 
 // Build identity is resolved from platform env vars or the checked-out git HEAD
 // and reported verbatim by /api/node and /health. No secrets are included.
@@ -150,7 +163,30 @@ async function initializeLedger({ background = false } = {}) {
   }
 }
 
-const configuredPeers = (process.env.BANNEKER_PEERS || process.env.BLACKCOIN_PEERS || '').split(',').map(value => value.trim()).filter(Boolean);
+// Seed peers. SEED_PEERS is the neutral name used by the Node B template; the
+// legacy BANNEKER_PEERS / BLACKCOIN_PEERS names remain supported.
+const configuredPeers = [...new Set(
+  (process.env.SEED_PEERS || process.env.PEERS || process.env.BANNEKER_PEERS || process.env.BLACKCOIN_PEERS || '')
+    .split(',').map(value => value.trim()).filter(Boolean)
+)];
+
+// Origins that identify this node. Used by both the seed bootstrap and the
+// registration endpoint so a node can never add or sync from itself.
+const selfOrigins = new Set([
+  publicUrl.toLowerCase(),
+  `http://127.0.0.1:${port}`.toLowerCase(),
+  `http://localhost:${port}`.toLowerCase(),
+  `http://0.0.0.0:${port}`.toLowerCase()
+]);
+
+function isSelfPeer(origin) {
+  if (typeof origin !== 'string' || !origin) return false;
+  return selfOrigins.has(origin.trim().replace(/\/+$/, '').toLowerCase());
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
 
 app.disable('x-powered-by');
 // Trust the upstream proxy chain unconditionally so req.ip and rate-limiting
@@ -337,13 +373,59 @@ async function acceptSubmission(req, kind, accept) {
   }
 }
 
-for (const peer of configuredPeers) {
-  try {
-    const origin = cleanPeerUrl(peer);
-    await assertPeerHostAllowed(new URL(origin).hostname, { allowPrivate: allowPrivatePeers });
-    await ledger.addPeer(origin);
-  } catch (error) {
-    console.warn(`Skipping configured peer ${peer}: ${error?.message || error}`);
+/**
+ * Registers this node with a remote peer. The remote re-verifies our identity
+ * by fetching /api/node from the advertised URL, so a successful 2xx means the
+ * peer has added us to its own peer list — this is the reverse half of
+ * bidirectional discovery.
+ */
+async function registerWithPeer(peer) {
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const response = await fetchPeer(`${peer}/api/peers`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'origin-peer': publicUrl },
+        body: JSON.stringify({ url: publicUrl }),
+        timeoutMs: 8_000,
+        allowPrivate: allowPrivatePeers
+      });
+      try { await response.body?.cancel(); } catch {}
+      if (!response.ok) throw new Error(`Peer registration returned HTTP ${response.status}.`);
+      await ledger.updatePeer(peer);
+      console.log(`Registered with peer ${peer}.`);
+      return true;
+    } catch (error) {
+      if (attempt >= 3) {
+        try { await ledger.updatePeer(peer, error.message); } catch {}
+        console.warn(`Could not register with peer ${peer}: ${error.message}`);
+        return false;
+      }
+      await sleep(1000 * attempt);
+    }
+  }
+  return false;
+}
+
+/**
+ * Seeds are applied only after the ledger exists. The previous top-level loop
+ * ran before initialization and silently failed on every configured peer.
+ */
+async function bootstrapPeers() {
+  for (const peer of configuredPeers) {
+    let origin;
+    try {
+      origin = cleanPeerUrl(peer);
+      if (isSelfPeer(origin)) {
+        console.warn(`Skipping self peer ${peer}.`);
+        continue;
+      }
+      await assertPeerHostAllowed(new URL(origin).hostname, { allowPrivate: allowPrivatePeers });
+      await ledger.addPeer(origin);
+    } catch (error) {
+      console.warn(`Skipping configured peer ${peer}: ${error?.message || error}`);
+      continue;
+    }
+    await registerWithPeer(origin);
   }
 }
 
@@ -375,7 +457,7 @@ async function postPeer(peer, endpoint, payload) {
 
 async function broadcast(endpoint, payload, skipPeer = null) {
   const peers = await ledger.getPeers();
-  await Promise.all(peers.filter(peer => peer.url !== skipPeer)
+  await Promise.all(peers.filter(peer => peer.url !== skipPeer && !isSelfPeer(peer.url))
     .map(peer => postPeer(peer.url, endpoint, payload)));
 }
 
@@ -390,6 +472,7 @@ async function synchronizePeers() {
   }
   const identity = ledger.getChainIdentity();
   for (const peer of peers) {
+    if (isSelfPeer(peer.url)) continue;
     let synced = false;
     let lastError = null;
     for (let attempt = 1; attempt <= 3; attempt += 1) {
@@ -556,7 +639,12 @@ app.post('/api/peers', asyncRoute(async (req, res) => {
     );
     throw error;
   }
-  if (peer === publicUrl || peer === `http://127.0.0.1:${port}` || peer === `http://localhost:${port}`) {
+  if (isSelfPeer(peer)) {
+    await faultRecorder.recordMany(
+      registrationFaultIdentifiers(req, peer),
+      'self-peering rejected',
+      1
+    );
     return res.status(400).json({ error: 'A node cannot peer with itself.' });
   }
   let info;
@@ -704,6 +792,9 @@ app.use((error, _req, res, _next) => {
 async function startPeerSync() {
   if (!ledger) return;
   try {
+    // Seed registration first: the remote learns about us, then we pull its
+    // chain. Both halves are needed for a symmetric peer relationship.
+    await bootstrapPeers();
     const peers = await ledger.getPeers();
     if (peers.length) void synchronizePeers().catch(error => console.warn(`Startup peer sync failed: ${error?.message || error}`));
   } catch (error) {
