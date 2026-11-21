@@ -374,6 +374,30 @@ export function parsePeerUrl(value) {
   return parsed;
 }
 
+/**
+ * Config sanity check for the URL a node advertises to peers. This is not a
+ * replacement for DNS-level SSRF screening; it only prevents an operator from
+ * accidentally advertising an internal default such as http://0.0.0.0:10000.
+ */
+export function isPublicAdvertisedOrigin(value) {
+  let parsed;
+  try {
+    parsed = parsePeerUrl(value);
+  } catch {
+    return false;
+  }
+  if (parsed.protocol !== 'https:') return false;
+
+  const host = String(parsed.hostname || '').replace(/^\[/, '').replace(/\]$/, '').toLowerCase();
+  if (!host) return false;
+  if (isIP(host)) return blockedAddressReason(host) === null;
+  if (host === 'localhost' || host.endsWith('.localhost') ||
+      host.endsWith('.local') || host.endsWith('.internal')) {
+    return false;
+  }
+  return true;
+}
+
 function assertOutboundPeerUrl(value) {
   if (typeof value !== 'string' || !value.trim()) {
     throw peerError('Peer URL must be a non-empty string.', 'PEER_URL_INVALID', 400);

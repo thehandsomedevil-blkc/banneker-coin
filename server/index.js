@@ -18,6 +18,7 @@ import {
   assertPeerHostAllowed,
   fetchPeer,
   fetchPeerJson,
+  isPublicAdvertisedOrigin,
   parsePeerUrl
 } from './security.js';
 import {
@@ -56,6 +57,16 @@ const dbPath = process.env.BANNEKER_DB || process.env.BLACKCOIN_DB || process.en
 const allowPrivatePeers = /^(?:1|true|yes|on)$/i.test(String(
   process.env.ALLOW_LOCAL_PEERS || process.env.BANNEKER_ALLOW_PRIVATE_PEERS || ''
 ).trim());
+
+// A node must not try to register an internal default origin with a peer.
+// Without an explicit public HTTPS URL we still serve the site and can pull
+// from seeds, but we skip outbound registration instead of emitting a
+// http://0.0.0.0:$PORT identity that another node correctly rejects as self.
+const canAdvertisePublicly = Boolean(advertisedUrl) &&
+  (allowPrivatePeers || isPublicAdvertisedOrigin(publicUrl));
+if (process.env.NODE_ENV === 'production' && !allowPrivatePeers && !canAdvertisePublicly) {
+  console.warn('PUBLIC_URL is missing or not a public HTTPS origin; peer registration is disabled. Set PUBLIC_URL to this node\'s external URL.');
+}
 
 // Build identity is resolved from platform env vars or the checked-out git HEAD
 // and reported verbatim by /api/node and /health. No secrets are included.
@@ -380,6 +391,10 @@ async function acceptSubmission(req, kind, accept) {
  * bidirectional discovery.
  */
 async function registerWithPeer(peer) {
+  if (!canAdvertisePublicly) {
+    console.warn(`Not registering with ${peer}: PUBLIC_URL is not a public HTTPS origin.`);
+    return false;
+  }
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
       const response = await fetchPeer(`${peer}/api/peers`, {
@@ -434,7 +449,7 @@ async function postPeer(peer, endpoint, payload) {
     try {
       const response = await fetchPeer(`${peer}${endpoint}`, {
         method: 'POST',
-        headers: { 'content-type': 'application/json', 'origin-peer': publicUrl },
+        headers: { 'content-type': 'application/json', 'origin-peer': canAdvertisePublicly ? publicUrl : '' },
         body: JSON.stringify(payload),
         timeoutMs: 5_000,
         allowPrivate: allowPrivatePeers

@@ -13,7 +13,7 @@ import { tmpdir } from 'node:os';
 import test from 'node:test';
 import nacl from 'nacl';
 import { hashBlock } from './ledger.js';
-import { assertPeerHostAllowed, parsePeerUrl } from './security.js';
+import { assertPeerHostAllowed, isPublicAdvertisedOrigin, parsePeerUrl } from './security.js';
 
 const projectRoot = path.resolve(fileURLToPath(new URL('../', import.meta.url)));
 
@@ -97,6 +97,17 @@ async function getJson(origin, route) {
   if (!response.ok) throw new Error(`GET ${route} -> ${response.status}: ${await response.text()}`);
   return response.json();
 }
+
+test('advertised origin helper rejects internal defaults before registration', () => {
+  assert.equal(isPublicAdvertisedOrigin('https://banneker-coin.onrender.com'), true);
+  assert.equal(isPublicAdvertisedOrigin('https://the-black-coin.onrender.com'), true);
+  assert.equal(isPublicAdvertisedOrigin('http://0.0.0.0:10000'), false);
+  assert.equal(isPublicAdvertisedOrigin('http://127.0.0.1:4174'), false);
+  assert.equal(isPublicAdvertisedOrigin('http://localhost:4174'), false);
+  assert.equal(isPublicAdvertisedOrigin('https://node.internal'), false);
+  assert.equal(isPublicAdvertisedOrigin('https://example.com/path'), false);
+  assert.equal(isPublicAdvertisedOrigin('not a url'), false);
+});
 
 test('public HTTPS peer origins pass SSRF screening, private ones still fail', async () => {
   const parsed = parsePeerUrl('https://banneker-coin.onrender.com');
