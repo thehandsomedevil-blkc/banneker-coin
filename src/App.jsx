@@ -532,7 +532,7 @@ export default function App() {
   const supplyPercent = Math.min(100, ((state?.supply || 0) / MAX_SUPPLY) * 100);
   const latest = state?.latestBlock;
 
-  return <div className="min-h-screen bg-obsidian">
+  return <div className="min-h-screen">
     <header className="border-b border-white/[.06]">
       <div className="mx-auto max-w-[1440px] px-5 py-5 sm:px-8 lg:px-12">
         <div className="flex flex-wrap items-center justify-between gap-5">

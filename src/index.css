@@ -22,7 +22,7 @@ body {
   min-height: 100vh;
   background-color: #09090b;
   background-image:
-    linear-gradient(rgba(9, 9, 11, .72), rgba(9, 9, 11, .86)),
+    linear-gradient(rgba(9, 9, 11, .25), rgba(9, 9, 11, .45)),
     url('/bnkr-bg.png');
   background-repeat: no-repeat;
   background-position: center;
