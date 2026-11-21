@@ -884,6 +884,75 @@ test('mining templates exclude invalid, stale, and overdrawn mempool entries', a
   }
 });
 
+test('mining template reads cached state, updates on acceptance, and invalidates on reorg', async () => {
+  const local = await createLedger(':memory:');
+  const peer = await createLedger(':memory:');
+  const miner = nacl.sign.keyPair();
+  const peerMiner = nacl.sign.keyPair();
+
+  // Count the expensive full-chain/account reads the template used to perform
+  // on every request. Wrapping the client keeps callers on the real executor.
+  const originalExecute = local.client.execute.bind(local.client);
+  let blockScans = 0;
+  let accountReads = 0;
+  local.client.execute = (...execArgs) => {
+    const sql = typeof execArgs[0] === 'string' ? execArgs[0] : execArgs[0]?.sql;
+    if (/chain_work FROM blocks[\s\S]*OFFSET \?/.test(sql)) blockScans += 1;
+    if (/SELECT address, balance_units, nonce FROM accounts/.test(sql)) accountReads += 1;
+    return originalExecute(...execArgs);
+  };
+  const resetReads = () => { blockScans = 0; accountReads = 0; };
+  const withoutTimestamp = ({ timestamp, ...template }) => template;
+
+  try {
+    const minerAddress = base64(miner.publicKey);
+    const peerAddress = base64(peerMiner.publicKey);
+
+    // Startup seeded the cache: repeated template builds must not scan storage.
+    resetReads();
+    const first = await local.miningTemplate(minerAddress);
+    assert.equal(blockScans, 0);
+    assert.equal(accountReads, 0);
+    const second = await local.miningTemplate(minerAddress);
+    assert.equal(blockScans, 0);
+    assert.equal(accountReads, 0);
+    assert.deepEqual(withoutTimestamp(first), withoutTimestamp(second));
+
+    // Acceptance advances the cache without a full re-read.
+    const accepted = await local.acceptBlock(mine(first));
+    assert.equal(accepted.height, 1);
+    resetReads();
+    const third = await local.miningTemplate(minerAddress);
+    assert.equal(blockScans, 0);
+    assert.equal(accountReads, 0);
+    assert.equal(third.height, 2);
+    assert.equal(third.prevHash, accepted.block.hash);
+
+    // A higher-work replacement must invalidate the cached snapshot.
+    await mineBranch(peer, peerMiner, 15_000, null, 2);
+    const peerChain = await peer.getBlocks();
+    const peerTip = peerChain[peerChain.length - 1];
+    assert.ok(BigInt((await peer.networkState()).chainWork) > BigInt((await local.networkState()).chainWork));
+    assert.equal((await local.replaceChain(peerChain)).replaced, true);
+
+    resetReads();
+    const afterReorg = await local.miningTemplate(peerAddress);
+    assert.ok(blockScans >= 1, 'chain replacement must invalidate the cached chain snapshot');
+    assert.ok(accountReads >= 1, 'chain replacement must invalidate the cached account snapshot');
+    assert.equal(afterReorg.prevHash, peerTip.hash);
+    assert.equal(afterReorg.height, peerTip.height + 1);
+
+    // The rebuilt snapshot is cached again for subsequent templates.
+    resetReads();
+    await local.miningTemplate(peerAddress);
+    assert.equal(blockScans, 0);
+    assert.equal(accountReads, 0);
+  } finally {
+    local.close();
+    peer.close();
+  }
+});
+
 test('Turso libsql URLs normalize to HTTPS without changing other transports', () => {
   assert.equal(normalizeTursoUrl('libsql://db.turso.io'), 'https://db.turso.io');
   assert.equal(

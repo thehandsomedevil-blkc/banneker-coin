@@ -1395,6 +1395,37 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     }
   }
 
+  // Read-only mining templates are built from an in-memory snapshot of the
+  // validated chain tip/accounts. It is seeded once after startup validation and
+  // kept in sync by every chain mutation path. This exists only to avoid
+  // re-fetching thousands of historical rows over HTTP on each template build;
+  // block/transaction/checkpoint/supply validation still runs in full on writes.
+  let templateStateCache = null;
+
+  function accountsFromValidation(balances, nonces) {
+    const accounts = new Map();
+    for (const [address, balanceUnits] of balances) {
+      accounts.set(address, { balance_units: balanceUnits, nonce: nonces.get(address) || 0 });
+    }
+    return accounts;
+  }
+
+  function setTemplateStateCache(blocks, accounts) {
+    templateStateCache = { blocks, accounts };
+  }
+
+  function invalidateTemplateStateCache() {
+    templateStateCache = null;
+  }
+
+  async function loadTemplateState() {
+    if (!templateStateCache) {
+      const [blocks, accounts] = await Promise.all([getBlocks(), readAccounts()]);
+      setTemplateStateCache(blocks, accounts);
+    }
+    return templateStateCache;
+  }
+
   // Startup validation and migration with safe recovery: if the stored tip is
   // invalid, roll back only invalid tip blocks to the last valid block. Chain
   // validity is prefix-closed, so binary search over the rollback point needs
@@ -1436,7 +1467,8 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
   }
 
   const startupAccounts = await readAccounts();
-  if (recovery || !accountsMatchValidation(startupAccounts, startupValidation)) {
+  const accountsNeedRebuild = recovery || !accountsMatchValidation(startupAccounts, startupValidation);
+  if (accountsNeedRebuild) {
     await withTransaction(async transaction => {
       if (recovery) {
         await transaction.execute({
@@ -1469,19 +1501,32 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     }
   }
 
+  let cachedBlocks = storedBlocks;
   if (needsMigration) {
     let chainWork = 0n;
     const batch = [];
+    const migratedBlocks = [];
     for (const block of storedBlocks) {
       if (block.height > 0) chainWork += workForDifficulty(block.difficulty);
       const migrated = { ...block, chainWork: chainWork.toString() };
+      migratedBlocks.push(migrated);
       batch.push({
         sql: "UPDATE blocks SET chain_work = ?, json = ? WHERE height = ?",
         args: [chainWork.toString(), JSON.stringify(migrated), block.height]
       });
     }
     await client.batch(batch, "write");
+    cachedBlocks = migratedBlocks;
   }
+
+  // Seed the template snapshot from already-validated startup state rather than
+  // scanning the chain a second time.
+  setTemplateStateCache(
+    cachedBlocks,
+    accountsNeedRebuild
+      ? accountsFromValidation(startupValidation.balances, startupValidation.nonces)
+      : startupAccounts
+  );
 
   // Checkpoints were already verified against the stored chain above, before
   // rollback and account rebuild. No later startup step may weaken that verdict.
@@ -1752,10 +1797,11 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
 
   async function miningTemplate(miner) {
     if (!validMiner(miner)) throw new Error('Miner must be a valid Ed25519 public key.');
-    const blocks = await getBlocks();
+    // Use the in-memory validated snapshot instead of re-reading the whole
+    // chain and account table over HTTP. Mutation paths keep this in sync.
+    const { blocks, accounts } = await loadTemplateState();
     const tip = blocks[blocks.length - 1];
     const height = tip.height + 1;
-    const accounts = await readAccounts();
     const immature = coinbaseEntriesForHeight(blocks, height, consensus);
     const selected = await selectMiningTransactions(accounts, immature);
     const transactions = selected.map(entry => entry.transaction);
@@ -1816,6 +1862,12 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       });
     }
     await withTransaction(transaction => applyBlock(storedBlock, txState.transactions, transaction));
+
+    // Keep the template snapshot current with the block that was just written.
+    // `blocks` and `accounts` were loaded fresh above, and `txState` is the
+    // fully validated post-block state, so no additional reads are needed.
+    setTemplateStateCache([...blocks, storedBlock], accountsFromValidation(txState.balances, txState.nonces));
+
     return { block: storedBlock, height: storedBlock.height, supply: txState.supply, chainWork };
   }
 
@@ -1923,6 +1975,10 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
         });
       }
     });
+
+    // A reorg changes the tip, account state, and recent difficulty history.
+    // Drop the cached snapshot so the next template rebuilds from the new chain.
+    invalidateTemplateStateCache();
 
     return {
       replaced: true,
