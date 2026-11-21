@@ -514,7 +514,10 @@ async function bootstrapPeers() {
  * SSRF targets, and must serve a compatible /api/node identity before use.
  */
 async function discoverTransitivePeers() {
-  if (!ledger || !canAdvertisePublicly) return;
+  // Discovery only reads peers we already have and adds what we learn locally.
+  // It must work even when this node cannot advertise itself; only the
+  // registration retry below depends on a valid public PUBLIC_URL.
+  if (!ledger) return;
 
   let knownPeers;
   try {

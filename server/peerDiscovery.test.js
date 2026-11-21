@@ -282,8 +282,21 @@ test('node learns a transitive peer through a bridge and closes the full mesh',
     try {
       // A is the canonical-like node. It only knows B. C only knows B. B is
       // the bridge that already has both edges before transitive discovery.
-      nodeA = await startNode({ directory, name: 'node-a', seedPeers: '' });
-      nodeC = await startNode({ directory, name: 'node-c', seedPeers: '' });
+      // A and C deliberately have no advertised PUBLIC_URL: discovery is a
+      // pull-only read and must still add the learned peer locally. Only the
+      // outbound registration retry depends on a valid public URL.
+      nodeA = await startNode({
+        directory,
+        name: 'node-a',
+        seedPeers: '',
+        extraEnv: { PUBLIC_URL: '' }
+      });
+      nodeC = await startNode({
+        directory,
+        name: 'node-c',
+        seedPeers: '',
+        extraEnv: { PUBLIC_URL: '' }
+      });
       await Promise.all([nodeA.ready(), nodeC.ready()]);
 
       nodeB = await startNode({
