@@ -25,6 +25,13 @@ import {
   buildBlockPage,
   fetchPeerChain
 } from './paging.js';
+import { securityHeadersMiddleware } from './securityHeaders.js';
+import { resolveBuildIdentity } from './buildIdentity.js';
+import {
+  createFaultRecorder,
+  registrationFaultIdentifiers,
+  submissionFaultIdentifiers
+} from './peerFaults.js';
 
 const app = express();
 const port = Number(process.env.PORT || 4174);
@@ -37,12 +44,9 @@ const dbPath = process.env.BANNEKER_DB || process.env.BLACKCOIN_DB || path.resol
 // stay blocked. It must never be set on a production node.
 const allowPrivatePeers = /^(?:1|true|yes|on)$/i.test(String(process.env.BANNEKER_ALLOW_PRIVATE_PEERS || '').trim());
 
-// Build identity is reported verbatim by /api/node and /health (§11.4). When the
-// operator does not inject build metadata the node says so instead of inventing
-// a commit. No secrets, credentials, or query strings are included.
-const sourceCommit = String(process.env.BANNEKER_SOURCE_COMMIT || process.env.GIT_COMMIT || '').trim() || null;
-const buildId = String(process.env.BANNEKER_BUILD_ID || '').trim() ||
-  (sourceCommit ? `${sourceCommit.slice(0, 12)}-unversioned` : 'dev-unversioned');
+// Build identity is resolved from platform env vars or the checked-out git HEAD
+// and reported verbatim by /api/node and /health. No secrets are included.
+const { buildId, sourceCommit } = resolveBuildIdentity();
 const storageKind = process.env.TURSO_DATABASE_URL ? 'turso' : 'local';
 const buildIdentity = Object.freeze({ buildId, sourceCommit, storage: storageKind });
 
@@ -97,6 +101,7 @@ let ledgerRetryAt = null;
 let backgroundRetryTimer = null;
 let initializationInFlight = false;
 let shuttingDown = false;
+const faultRecorder = createFaultRecorder(() => ledger);
 
 function stopBackgroundRetry() {
   if (backgroundRetryTimer) clearTimeout(backgroundRetryTimer);
@@ -160,17 +165,7 @@ if (trustProxyHops !== undefined && String(trustProxyHops).trim() !== '') {
   app.set('trust proxy', hops);
 }
 
-app.use((_req, res, next) => {
-  res.set({
-    'X-Content-Type-Options': 'nosniff',
-    'X-Frame-Options': 'DENY',
-    'Referrer-Policy': 'no-referrer',
-    'X-DNS-Prefetch-Control': 'off',
-    'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
-    'Cross-Origin-Opener-Policy': 'same-origin'
-  });
-  next();
-});
+app.use(securityHeadersMiddleware);
 
 // Configure static files BEFORE API middleware to avoid 403s on assets
 const webRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../dist');
@@ -314,13 +309,32 @@ const apiJsonParser = strictJsonParser({ limit: PROTECTION_STATUS.maxJsonBodyByt
 app.use(['/api/mining/submit', '/api/peer/block'], blockJsonParser);
 app.use('/api', apiJsonParser);
 
+// Express skips ordinary middleware after a parser error, so this error handler
+// must sit immediately after the parsers to fault malformed peer payloads.
+app.use('/api/peer', async (error, req, _res, next) => {
+  const source = await peerIdentity(req);
+  await faultRecorder.recordMany(
+    submissionFaultIdentifiers(req, source),
+    `malformed peer payload: ${error?.code || error?.type || 'INVALID_JSON'}`,
+    1
+  );
+  next(error);
+});
+
 const cleanPeerUrl = value => parsePeerUrl(value).origin;
 
-async function acceptSubmission(_req, _kind, accept) {
-  // Validation/signature failures return a clear 400 from the error handler;
-  // clients are not auto-banned for a single invalid submission. Temporary bans
-  // are reserved for repeated spam floods handled by rate limiting.
-  return accept();
+async function acceptSubmission(req, kind, accept) {
+  try {
+    return await accept();
+  } catch (error) {
+    // Invalid signatures, hashes, checkpoints and malformed consensus payloads
+    // now count toward the advertised peer ban instead of being free probes.
+    const code = typeof error?.code === 'string' ? error.code : 'INVALID_SUBMISSION';
+    const reason = `${kind} rejected: ${code}`;
+    const source = req?.get ? await peerIdentity(req) : null;
+    await faultRecorder.recordMany(submissionFaultIdentifiers(req, source), reason, 1);
+    throw error;
+  }
 }
 
 for (const peer of configuredPeers) {
@@ -407,6 +421,12 @@ async function synchronizePeers() {
       }
     }
     if (!synced) {
+      const permanent = isPermanentSyncError(lastError);
+      await faultRecorder.record(
+        `peer:${peer.url}`,
+        `peer sync rejected: ${lastError?.code || lastError?.message || 'SYNC_FAILED'}`,
+        permanent ? 2 : 1
+      );
       try { await ledger.updatePeer(peer.url, lastError?.message || 'Peer sync failed'); } catch {}
       console.warn(`Peer sync ${peer.url}: ${lastError?.message || lastError}`);
       results.push({ peer: peer.url, error: lastError?.message || String(lastError), code: lastError?.code ?? null });
@@ -525,16 +545,41 @@ app.get('/api/peers', asyncRoute(async (_req, res) => {
 }));
 
 app.post('/api/peers', asyncRoute(async (req, res) => {
-  const peer = cleanPeerUrl(req.body?.url);
+  let peer;
+  try {
+    peer = cleanPeerUrl(req.body?.url);
+  } catch (error) {
+    await faultRecorder.recordMany(
+      registrationFaultIdentifiers(req),
+      `invalid peer URL: ${error?.code || 'PEER_URL_INVALID'}`,
+      1
+    );
+    throw error;
+  }
   if (peer === publicUrl || peer === `http://127.0.0.1:${port}` || peer === `http://localhost:${port}`) {
     return res.status(400).json({ error: 'A node cannot peer with itself.' });
   }
-  const info = await fetchPeerJson(`${peer}/api/node`, {
-    maxBytes: PEER_LIMITS.maxPeerNodeInfoBytes,
-    timeoutMs: 5_000,
-    allowPrivate: allowPrivatePeers
-  });
+  let info;
+  try {
+    info = await fetchPeerJson(`${peer}/api/node`, {
+      maxBytes: PEER_LIMITS.maxPeerNodeInfoBytes,
+      timeoutMs: 5_000,
+      allowPrivate: allowPrivatePeers
+    });
+  } catch (error) {
+    await faultRecorder.recordMany(
+      registrationFaultIdentifiers(req, peer),
+      `peer registration probe failed: ${error?.code || 'PEER_UNREACHABLE'}`,
+      1
+    );
+    throw error;
+  }
   if (info.name !== 'The Banneker Coin' || info.ticker !== 'BNKR') {
+    await faultRecorder.recordMany(
+      registrationFaultIdentifiers(req, peer),
+      'peer identity mismatch',
+      1
+    );
     throw new Error('The URL did not identify a compatible BNKR node.');
   }
   await ledger.addPeer(peer);

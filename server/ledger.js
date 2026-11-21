@@ -777,6 +777,32 @@ export function normalizeTursoUrl(value) {
   return value.replace(/^libsql:\/\//i, 'https://');
 }
 
+/**
+ * F-06: remote storage is mandatory once configured. There is no silent
+ * `file:` substitution and no unauthenticated remote client. A misconfigured
+ * node fails closed before it can create or seed a different chain.
+ */
+export function resolveStorageTarget(env = process.env, databasePath = 'blackcoin.db') {
+  const raw = typeof env?.TURSO_DATABASE_URL === 'string' ? env.TURSO_DATABASE_URL.trim() : '';
+  if (!raw) {
+    return Object.freeze({ url: `file:${databasePath}`, remote: false, token: undefined });
+  }
+  const url = normalizeTursoUrl(raw);
+  const invalid = message => Object.assign(new Error(message), {
+    code: 'REMOTE_STORAGE_CONFIG_INVALID'
+  });
+  if (!/^https:\/\//i.test(url)) {
+    throw invalid('TURSO_DATABASE_URL must be a libsql:// or https:// remote endpoint; local file fallback is disabled when remote storage is configured.');
+  }
+  const token = typeof env.TURSO_AUTH_TOKEN === 'string' && env.TURSO_AUTH_TOKEN.trim()
+    ? env.TURSO_AUTH_TOKEN
+    : undefined;
+  if (!token) {
+    throw invalid('TURSO_AUTH_TOKEN is required when TURSO_DATABASE_URL is configured; refusing to start without authenticated remote storage.');
+  }
+  return Object.freeze({ url, remote: true, token });
+}
+
 export const BLOCK_LOAD_PAGE_SIZE = 250;
 
 /**
@@ -855,7 +881,7 @@ export async function createLedgerWithRetry(
   throw lastError;
 }
 
-export async function createLedger(databasePath = 'blackcoin.db', options = {}) {
+export async function createLedger(databasePath = 'blackcoin.db', options = {}, env = process.env) {
   // Consensus switches are read once at construction. A running process never
   // changes era mid-flight. Q-1 is resolved: the compiled default is height
   // 5000, and an operator may move it for testnet with
@@ -913,15 +939,11 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
   const checkpoints = checkpointManifest.checkpoints;
   const checkpointsByHeight = new Map(checkpoints.map(checkpoint => [checkpoint.height, checkpoint]));
 
-  const tursoUrl = envValue('TURSO_DATABASE_URL');
-  // Keep an unset token as undefined; the HTTP client omits the Authorization
-  // header only for undefined, while null would be sent as "Bearer null".
-  const tursoToken = process.env.TURSO_AUTH_TOKEN;
-
-  // libsql:// is normalized to https:// so Node 24's undici HTTP transport
-  // handles the remote endpoint during Turso cold starts.
-  const url = normalizeTursoUrl(tursoUrl) || `file:${databasePath}`;
-  const client = createClient({ url, authToken: tursoToken });
+  // Remote storage is never substituted with a local file, and a configured
+  // remote endpoint without a token is a startup error rather than an anonymous
+  // connection (F-06).
+  const storage = resolveStorageTarget(env, databasePath);
+  const client = createClient({ url: storage.url, authToken: storage.token });
 
   // All chain-state mutations (block acceptance, mempool admission, and chain
   // replacement) pass through this queue. It serializes conflicting writers and
@@ -945,58 +967,81 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
     }
   }
 
-  // Initialize schema
-  await client.batch([
-    `CREATE TABLE IF NOT EXISTS blocks (
-      height INTEGER PRIMARY KEY,
-      timestamp INTEGER NOT NULL,
-      hash TEXT NOT NULL UNIQUE,
-      miner TEXT,
-      tx_count INTEGER NOT NULL,
-      json TEXT NOT NULL,
-      chain_work TEXT NOT NULL DEFAULT '0'
-    )`,
-    `CREATE TABLE IF NOT EXISTS accounts (
-      address TEXT PRIMARY KEY,
-      balance_units INTEGER NOT NULL DEFAULT 0,
-      nonce INTEGER NOT NULL DEFAULT 0
-    )`,
-    `CREATE TABLE IF NOT EXISTS mempool (
-      id INTEGER PRIMARY KEY AUTOINCREMENT,
-      sender TEXT NOT NULL,
-      nonce INTEGER NOT NULL,
-      timestamp INTEGER NOT NULL,
-      json TEXT NOT NULL,
-      UNIQUE(sender, nonce)
-    )`,
-    `CREATE TABLE IF NOT EXISTS peers (
-      url TEXT PRIMARY KEY,
-      last_seen INTEGER,
-      last_error TEXT
-    )`,
-    `CREATE TABLE IF NOT EXISTS peer_bans (
-      identifier TEXT PRIMARY KEY,
-      score INTEGER NOT NULL,
-      banned_until INTEGER,
-      reason TEXT NOT NULL,
-      updated_at INTEGER NOT NULL
-    )`
-  ], "write");
+  async function initializeSchema() {
+    await client.batch([
+      `CREATE TABLE IF NOT EXISTS blocks (
+        height INTEGER PRIMARY KEY,
+        timestamp INTEGER NOT NULL,
+        hash TEXT NOT NULL UNIQUE,
+        miner TEXT,
+        tx_count INTEGER NOT NULL,
+        json TEXT NOT NULL,
+        chain_work TEXT NOT NULL DEFAULT '0'
+      )`,
+      `CREATE TABLE IF NOT EXISTS accounts (
+        address TEXT PRIMARY KEY,
+        balance_units INTEGER NOT NULL DEFAULT 0,
+        nonce INTEGER NOT NULL DEFAULT 0
+      )`,
+      `CREATE TABLE IF NOT EXISTS mempool (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        sender TEXT NOT NULL,
+        nonce INTEGER NOT NULL,
+        timestamp INTEGER NOT NULL,
+        json TEXT NOT NULL,
+        UNIQUE(sender, nonce)
+      )`,
+      `CREATE TABLE IF NOT EXISTS peers (
+        url TEXT PRIMARY KEY,
+        last_seen INTEGER,
+        last_error TEXT
+      )`,
+      `CREATE TABLE IF NOT EXISTS peer_bans (
+        identifier TEXT PRIMARY KEY,
+        score INTEGER NOT NULL,
+        banned_until INTEGER,
+        reason TEXT NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`
+    ], "write");
 
-  // Check for chain_work column (for migrations)
-  const tableInfo = await client.execute("PRAGMA table_info(blocks)");
-  if (!tableInfo.rows.some(row => row.name === 'chain_work')) {
-    await client.execute("ALTER TABLE blocks ADD COLUMN chain_work TEXT NOT NULL DEFAULT '0'");
+    const tableInfo = await client.execute("PRAGMA table_info(blocks)");
+    if (!tableInfo.rows.some(row => row.name === 'chain_work')) {
+      await client.execute("ALTER TABLE blocks ADD COLUMN chain_work TEXT NOT NULL DEFAULT '0'");
+    }
+
+    // Genesis is seeded only for a local development database. A configured
+    // remote store that is empty is an error: auto-genesis there would fork the
+    // node onto a brand-new height-0 chain.
+    const genesisCheck = await client.execute("SELECT 1 FROM blocks WHERE height = 0");
+    if (genesisCheck.rows.length === 0) {
+      if (storage.remote) {
+        throw Object.assign(
+          new Error('Configured remote storage contains no genesis block; refusing to auto-generate a new chain.'),
+          { code: 'REMOTE_STORAGE_EMPTY' }
+        );
+      }
+      const genesis = genesisBlock();
+      await client.execute({
+        sql: "INSERT INTO blocks(height, timestamp, hash, miner, tx_count, json, chain_work) VALUES (?, ?, ?, ?, ?, ?, ?)",
+        args: [0, GENESIS_TIMESTAMP, genesis.hash, null, 0, JSON.stringify(genesis), '0']
+      });
+    }
   }
 
-  // Genesis block initialization
-  const genesisCheck = await client.execute("SELECT 1 FROM blocks WHERE height = 0");
-  if (genesisCheck.rows.length === 0) {
-    const genesis = genesisBlock();
-    await client.execute({
-      sql: "INSERT INTO blocks(height, timestamp, hash, miner, tx_count, json, chain_work) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      args: [0, GENESIS_TIMESTAMP, genesis.hash, null, 0, JSON.stringify(genesis), '0']
-    });
+  try {
+    await initializeSchema();
+  } catch (error) {
+    client.close();
+    if (storage.remote && error?.code !== 'REMOTE_STORAGE_EMPTY') {
+      // Error text is deliberately generic: transport errors may echo the
+      // connection URL and the auth token must never surface in logs or APIs.
+      const fatal = new Error('Configured remote storage could not be initialized; refusing to start an empty local chain.');
+      fatal.code = 'REMOTE_STORAGE_UNAVAILABLE';
+      fatal.causeName = error?.name || 'Error';
+      throw fatal;
+    }
+    throw error;
   }
 
   async function getBlockRows() {
@@ -1263,6 +1308,44 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
     return compareAccounts(accounts, validation).length === 0;
   }
 
+  // Checkpoint enforcement happens BEFORE any recovery write. A stored chain
+  // that conflicts with a compiled anchor is fatal and preserved for the
+  // operator; it is never "repaired" by silently truncating history.
+  function enforceStartupCheckpoints(blocks) {
+    try {
+      validateCheckpointSet(checkpointManifest, {
+        networkId: NETWORK_ID,
+        genesisHash: GENESIS_HASH,
+        priorManifest: priorCheckpointValue,
+        expectedManifestDigest,
+        blocks,
+        activationHeight: consensus.v2ActivationHeight,
+        burial: checkpointBurial,
+        // K-6 is a publication-time rule for *adding* an anchor. Startup must not
+        // reject an already-published anchor merely because a test chain is short.
+        enforceBurial: false
+      });
+      const status = checkpointStatus(blocks);
+      if (status.checkpointState === 'VIOLATED') {
+        const first = status.checkpointErrors[0];
+        throw new CheckpointError(
+          'CHECKPOINT_VIOLATION',
+          `Stored chain violates checkpoint at height ${first?.height}: ${first?.message || 'verification failed'}.`,
+          first?.details ?? {}
+        );
+      }
+      if (status.checkpointState === 'UNSUPPORTED_PROTOCOL_VERSION') {
+        throw new CheckpointError(
+          'UNSUPPORTED_PROTOCOL_VERSION',
+          'A configured checkpoint uses a protocol version this binary cannot validate.'
+        );
+      }
+    } catch (error) {
+      client.close();
+      throw error;
+    }
+  }
+
   // Startup validation and migration with safe recovery: if the stored tip is
   // invalid, roll back only invalid tip blocks to the last valid block. Chain
   // validity is prefix-closed, so binary search over the rollback point needs
@@ -1270,6 +1353,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
   // path). Account reconstruction is checked against a full replay and repaired
   // atomically. Never wipe to genesis.
   let storedBlocks = await getBlocks();
+  enforceStartupCheckpoints(storedBlocks);
   let startupValidation = validateChainInternal(storedBlocks, consensus);
   let recovery = null;
   if (!startupValidation.valid) {
@@ -1350,42 +1434,8 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}) 
     await client.batch(batch, "write");
   }
 
-  // Checkpoint enforcement at startup. Structural continuity is checked first,
-  // then every applicable anchor is fully re-derived from genesis. A violated
-  // set is fatal: the database is preserved for the operator, and the node must
-  // not serve a chain that contradicts its own compiled constants.
-  try {
-    validateCheckpointSet(checkpointManifest, {
-      networkId: NETWORK_ID,
-      genesisHash: GENESIS_HASH,
-      priorManifest: priorCheckpointValue,
-      expectedManifestDigest,
-      blocks: storedBlocks,
-      activationHeight: consensus.v2ActivationHeight,
-      burial: checkpointBurial,
-      // K-6 is a publication-time rule for *adding* an anchor. Startup must not
-      // reject an already-published anchor merely because a test chain is short.
-      enforceBurial: false
-    });
-    const startupCheckpoints = checkpointStatus(storedBlocks);
-    if (startupCheckpoints.checkpointState === 'VIOLATED') {
-      const first = startupCheckpoints.checkpointErrors[0];
-      throw new CheckpointError(
-        'CHECKPOINT_VIOLATION',
-        `Stored chain violates checkpoint at height ${first?.height}: ${first?.message || 'verification failed'}.`,
-        first?.details ?? {}
-      );
-    }
-    if (startupCheckpoints.checkpointState === 'UNSUPPORTED_PROTOCOL_VERSION') {
-      throw new CheckpointError(
-        'UNSUPPORTED_PROTOCOL_VERSION',
-        'A configured checkpoint uses a protocol version this binary cannot validate.'
-      );
-    }
-  } catch (error) {
-    client.close();
-    throw error;
-  }
+  // Checkpoints were already verified against the stored chain above, before
+  // rollback and account rebuild. No later startup step may weaken that verdict.
 
   async function getAccount(address) {
     const result = await client.execute({

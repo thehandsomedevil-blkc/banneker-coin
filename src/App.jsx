@@ -9,13 +9,17 @@ import {
   ChevronRight
 } from 'lucide-react';
 import {
+  createEncryptedWallet,
   decryptWallet,
-  encryptWallet,
-  isEncryptedWallet,
   LEGACY_STORAGE_KEY,
+  migrateLegacyWallet,
   OLD_LEGACY_STORAGE_KEY,
   OLD_VAULT_STORAGE_KEY,
-  VAULT_STORAGE_KEY
+  readWalletState,
+  signWithVault,
+  VAULT_STORAGE_KEY,
+  wipeLegacyWallet,
+  writeEncryptedWallet
 } from './walletVault.js';
 import {
   COIN,
@@ -74,40 +78,11 @@ function decodeBase64(value) {
 function initializeWallet() {
   migrateStorageKey(VAULT_STORAGE_KEY, OLD_VAULT_STORAGE_KEY);
   migrateStorageKey(LEGACY_STORAGE_KEY, OLD_LEGACY_STORAGE_KEY);
-
-  const encrypted = localStorage.getItem(VAULT_STORAGE_KEY);
-  if (encrypted) {
-    try {
-      const vault = JSON.parse(encrypted);
-      if (!isEncryptedWallet(vault)) throw new Error('Encrypted wallet storage is malformed.');
-      return { wallet: { publicKey: vault.publicKey, protected: true, legacy: false }, vault };
-    } catch (error) {
-      return { wallet: null, vault: null, initialError: error.message };
-    }
+  try {
+    return { ...readWalletState(), initialError: null };
+  } catch (error) {
+    return { wallet: null, vault: null, needsMigration: false, initialError: error.message };
   }
-
-  const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-  if (legacy) {
-    try {
-      const stored = JSON.parse(legacy);
-      if (typeof stored.publicKey !== 'string' || typeof stored.secretKey !== 'string') {
-        throw new Error('Legacy wallet storage is malformed.');
-      }
-      return {
-        wallet: {
-          publicKey: stored.publicKey,
-          secretKey: stored.secretKey,
-          protected: false,
-          legacy: true
-        },
-        legacy: true
-      };
-    } catch (error) {
-      return { wallet: null, vault: null, initialError: error.message };
-    }
-  }
-
-  return { wallet: null, vault: null };
 }
 
 function readContacts() {
@@ -212,13 +187,17 @@ function signingMessage(payload) {
 }
 
 export default function App() {
-  const [wallet, setWallet] = useState(() => initializeWallet().wallet);
+  const [initial] = useState(initializeWallet);
+  const [wallet, setWallet] = useState(initial.wallet);
   const [state, setState] = useState(null);
   const [blocks, setBlocks] = useState([]);
   const [totalBlocks, setTotalBlocks] = useState(0);
   const [mempool, setMempool] = useState([]);
   const [verified, setVerified] = useState(null);
-  const [vault, setVault] = useState(() => initializeWallet().vault);
+  const [vault, setVault] = useState(initial.vault);
+  const [needsMigration, setNeedsMigration] = useState(initial.needsMigration);
+  const [pendingWallet, setPendingWallet] = useState(null);
+  const [signRequest, setSignRequest] = useState(null);
   const [page, setPage] = useState(0);
   const [search, setSearch] = useState('');
   const [expanded, setExpanded] = useState(null);
@@ -240,11 +219,19 @@ export default function App() {
     migrateStorageKey(QUICKSTART_KEY, OLD_QUICKSTART_KEY);
   }, []);
 
+  useEffect(() => {
+    if (needsMigration) setModal('migrate');
+  }, [needsMigration]);
+
   const notify = useCallback((message, kind = 'success') => {
     setNotice({ message, kind });
     window.clearTimeout(notify.timeout);
     notify.timeout = window.setTimeout(() => setNotice(null), 4200);
   }, []);
+
+  useEffect(() => {
+    if (initial.initialError) notify(initial.initialError, 'error');
+  }, [initial.initialError, notify]);
 
   const refresh = useCallback(async (opts = {}) => {
     const { silent = false } = opts;
@@ -364,31 +351,50 @@ export default function App() {
 
   useEffect(() => () => window.clearTimeout(searchTimer.current), []);
 
-  const createWallet = () => {
+  // No raw secret key is ever persisted. Creation and import stage the secret
+  // only until the operator supplies a password, then it is encrypted and the
+  // in-memory copy is zeroed.
+  const beginCreateWallet = () => {
     const pair = nacl.sign.keyPair();
-    const next = {
-      publicKey: encodeBase64(pair.publicKey),
-      secretKey: encodeBase64(pair.secretKey)
-    };
-    localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(next));
-    setWallet({ ...next, protected: false, legacy: true });
-    setModal(null);
-    notify('Anonymous wallet generated. Back up your private key.');
+    setPendingWallet({ secretKey: pair.secretKey, publicKey: encodeBase64(pair.publicKey), mode: 'create' });
+    setModal('password');
   };
 
-  const importWallet = value => {
+  const beginImportWallet = value => {
     try {
       const secret = decodeBase64(value.trim());
       if (secret.length !== nacl.sign.secretKeyLength) throw new Error('Expected a 64-byte Ed25519 secret key.');
       const pair = nacl.sign.keyPair.fromSecretKey(secret);
-      const next = { publicKey: encodeBase64(pair.publicKey), secretKey: value.trim() };
-      localStorage.setItem(LEGACY_STORAGE_KEY, JSON.stringify(next));
-      setWallet({ ...next, protected: false, legacy: true });
-      setModal(null);
-      notify('Wallet restored on this browser.');
+      setPendingWallet({ secretKey: secret, publicKey: encodeBase64(pair.publicKey), mode: 'import' });
+      setModal('password');
     } catch (error) {
       notify(error.message || 'Private key could not be imported.', 'error');
     }
+  };
+
+  const protectPendingWallet = async password => {
+    if (!pendingWallet) throw new Error('No wallet is waiting to be protected.');
+    const { secretKey, publicKey, mode } = pendingWallet;
+    const nextVault = await createEncryptedWallet(secretKey, password);
+    writeEncryptedWallet(nextVault);
+    wipeLegacyWallet();
+    secretKey.fill(0);
+    setVault(nextVault);
+    setWallet({ publicKey, protected: true, legacy: false });
+    setPendingWallet(null);
+    setNeedsMigration(false);
+    notify(mode === 'import'
+      ? 'Wallet restored and encrypted with your password.'
+      : 'Encrypted wallet generated. Download the vault backup.');
+  };
+
+  const protectLegacyWallet = async password => {
+    const migrated = await migrateLegacyWallet(password);
+    if (!migrated) throw new Error('The legacy wallet entry is no longer present.');
+    setVault(migrated.vault);
+    setWallet({ publicKey: migrated.publicKey, protected: true, legacy: false });
+    setNeedsMigration(false);
+    notify('Legacy wallet encrypted; plaintext key removed from this browser.');
   };
 
   const copy = async value => {
@@ -418,11 +424,14 @@ export default function App() {
   const send = async event => {
     event.preventDefault();
     if (!wallet || busy) return;
+    if (needsMigration || !vault) {
+      setNeedsMigration(true);
+      setModal('migrate');
+      notify('Set a wallet password before sending a transaction.', 'error');
+      return;
+    }
     setBusy(true);
     try {
-      if (!wallet.secretKey) {
-        throw new Error('Unlock your wallet before sending a transaction.');
-      }
       const normalizedAmount = String(sendAmount || '').trim();
       const normalizedRecipient = String(recipient || '').trim();
       if (!/^(?:0|[1-9]\d*)(?:\.\d{1,8})?$/.test(normalizedAmount) || Number(normalizedAmount) <= 0) {
@@ -437,16 +446,33 @@ export default function App() {
       const pending = (freshPool.transactions || []).filter(tx => tx.sender === wallet.publicKey);
       const nextNonce = Number(freshState.nonce || 0) + pending.length + 1;
       const payload = makePayload(wallet.publicKey, normalizedRecipient, amount, nextNonce);
-      const signature = nacl.sign.detached(
-        new TextEncoder().encode(signingMessage(payload)),
-        decodeBase64(wallet.secretKey)
+      setSignRequest({ payload });
+      setModal('sign');
+    } catch (error) {
+      notify(error.message, 'error');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  // Signing decrypts the vault only for this operation; the secret is zeroed by
+  // signWithVault and never placed in component state or localStorage.
+  const confirmSign = async password => {
+    if (!signRequest || !vault) return;
+    setBusy(true);
+    try {
+      const signature = await signWithVault(
+        vault,
+        password,
+        new TextEncoder().encode(signingMessage(signRequest.payload))
       );
       await request('/api/tx', {
         method: 'POST',
-        body: JSON.stringify({ ...payload, signature: encodeBase64(signature) })
+        body: JSON.stringify({ ...signRequest.payload, signature: encodeBase64(signature) })
       });
       setRecipient('');
       setSendAmount('');
+      setSignRequest(null);
       notify('Signed transfer broadcast to the mempool.');
       await refresh();
     } catch (error) {
@@ -527,7 +553,11 @@ export default function App() {
       <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.08fr)_minmax(390px,.92fr)]">
         <section className="space-y-5">
           <div className="glass-card rounded-2xl p-5 sm:p-6">
-            <SectionTitle icon={Wallet} title="Anonymous Wallet" detail="Non-custodial · keys are generated and kept in this browser" />
+            <SectionTitle icon={Wallet} title="Anonymous Wallet" detail="Non-custodial · secret key encrypted in this browser with your password" />
+            {needsMigration && <div role="alert" className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-amber-400/30 bg-amber-400/[.06] px-4 py-3 text-xs text-amber-200">
+              <span>An unencrypted legacy wallet was found in this browser. Set a password to encrypt it and delete the plaintext key.</span>
+              <button onClick={() => setModal('migrate')} className="gold-button rounded-lg px-3 py-2 text-xs font-semibold">Secure it now</button>
+            </div>}
             {wallet ? <>
               <div className="rounded-xl border border-white/[.07] bg-black/20 p-4">
                 <div className="mb-2 flex items-center justify-between"><span className="text-[10px] uppercase tracking-[.15em] text-[#77756e]">Public address</span><button aria-label="Copy wallet address" className="text-[#8f8b80] hover:text-gold" onClick={() => void copy(wallet.publicKey)}><Copy size={14} /></button></div>
@@ -542,10 +572,10 @@ export default function App() {
                 <label className="block"><span className="mb-2 block text-[10px] uppercase tracking-[.12em] text-[#77756e]">Amount · BNKR</span><input className="field rounded-lg px-3 py-3 text-xs" inputMode="decimal" placeholder="0.00000000" value={sendAmount} onChange={event => setSendAmount(event.target.value)} required /></label>
                 <button disabled={busy || !state} className="gold-button mt-auto inline-flex h-[42px] items-center justify-center gap-2 rounded-lg px-4 text-xs font-semibold"><ArrowUpRight size={14} />{busy ? 'Signing…' : 'Send BNKR'}</button>
               </form>
-              <p className="mt-3 flex items-start gap-2 text-[10px] leading-5 text-[#77756e]"><LockKeyhole size={12} className="mt-0.5 shrink-0 text-gold/70" />Transactions are signed locally. Your private key is never submitted to the node.</p>
+              <p className="mt-3 flex items-start gap-2 text-[10px] leading-5 text-[#77756e]"><LockKeyhole size={12} className="mt-0.5 shrink-0 text-gold/70" />Transactions are signed locally after you enter your password. Your private key is never submitted to the node or stored in plaintext.</p>
             </> : <div className="rounded-xl border border-dashed border-[#39352a] px-5 py-8 text-center">
               <Fingerprint size={25} className="mx-auto text-gold/70" /><p className="mt-3 text-sm text-[#d9d3c5]">No wallet connected</p><p className="mt-1 text-xs text-[#77756e]">Create or restore a wallet. No registration required.</p>
-              <div className="mt-5 flex flex-wrap justify-center gap-2"><button onClick={createWallet} className="gold-button rounded-lg px-4 py-2.5 text-xs font-semibold">Generate New Anonymous Wallet</button><button onClick={() => setModal('import')} className="quiet-button rounded-lg px-4 py-2.5 text-xs">Import Private Key</button></div>
+              <div className="mt-5 flex flex-wrap justify-center gap-2"><button onClick={beginCreateWallet} className="gold-button rounded-lg px-4 py-2.5 text-xs font-semibold">Generate New Anonymous Wallet</button><button onClick={() => setModal('import')} className="quiet-button rounded-lg px-4 py-2.5 text-xs">Import Private Key</button></div>
             </div>}
           </div>
 
@@ -621,8 +651,30 @@ export default function App() {
 
     {notice && <div role="status" className={`fixed bottom-5 right-5 z-[60] flex max-w-[min(90vw,480px)] items-start gap-3 rounded-xl border px-4 py-3 text-xs shadow-2xl ${notice.kind === 'error' ? 'border-red-400/30 bg-[#211111] text-red-200' : 'border-gold/30 bg-[#19160c] text-[#e9dfc2]'}`}><span className="mt-0.5">{notice.kind === 'error' ? <CircleAlert size={15} /> : <Check size={15} />}</span>{notice.message}</div>}
     {modal === 'whitepaper' && <Whitepaper onClose={() => setModal(null)} />}
-    {modal === 'wallet' && <Modal title="Create an anonymous wallet" onClose={() => setModal(null)}><p className="text-sm leading-7 text-[#b8b2a5]">A new Ed25519 keypair is generated in this browser. The secret key is stored only in this browser’s local storage; anyone who obtains it can control the wallet. Export a backup and keep it offline.</p><div className="mt-5 flex flex-wrap justify-end gap-2"><button onClick={() => setModal('import')} className="quiet-button rounded-lg px-4 py-2.5 text-xs">Import existing key</button><button onClick={createWallet} className="gold-button rounded-lg px-4 py-2.5 text-xs font-semibold">Generate New Anonymous Wallet</button></div></Modal>}
-    {modal === 'import' && <KeyModal title="Import private key" action="Restore wallet" onClose={() => setModal(null)} onSubmit={importWallet} />}
+    {modal === 'wallet' && <Modal title="Create an anonymous wallet" onClose={() => setModal(null)}><p className="text-sm leading-7 text-[#b8b2a5]">A new Ed25519 keypair is generated in this browser and encrypted with a password you choose. The raw secret key is never stored; only the encrypted vault stays in this browser. Keep an offline backup of the vault and remember the password — neither can be recovered by a central authority.</p><div className="mt-5 flex flex-wrap justify-end gap-2"><button onClick={() => setModal('import')} className="quiet-button rounded-lg px-4 py-2.5 text-xs">Import existing key</button><button onClick={beginCreateWallet} className="gold-button rounded-lg px-4 py-2.5 text-xs font-semibold">Generate New Anonymous Wallet</button></div></Modal>}
+    {modal === 'import' && <KeyModal title="Import private key" action="Continue" onClose={() => setModal(null)} onSubmit={beginImportWallet} />}
+    {modal === 'password' && pendingWallet && <PasswordModal
+      title="Protect your wallet"
+      action={pendingWallet.mode === 'import' ? 'Encrypt & restore wallet' : 'Create encrypted wallet'}
+      description="Choose a password of at least 12 characters. It encrypts the secret key in this browser with PBKDF2-SHA-256 and AES-GCM. The key cannot be recovered without it."
+      onClose={() => { setPendingWallet(null); setModal(null); }}
+      onSubmit={protectPendingWallet}
+    />}
+    {modal === 'migrate' && needsMigration && <PasswordModal
+      title="Secure an existing wallet"
+      action="Encrypt & remove plaintext"
+      description="An unencrypted wallet was found in this browser. Set a password now: the key is moved into the encrypted vault and the plaintext entry is deleted."
+      onClose={() => setModal(null)}
+      onSubmit={protectLegacyWallet}
+    />}
+    {modal === 'sign' && signRequest && <PasswordModal
+      title="Unlock to sign"
+      action="Sign & broadcast"
+      confirm={false}
+      description="Enter your wallet password to decrypt the key for this transfer. The decrypted key is used only for this signature and is wiped from memory immediately."
+      onClose={() => { setSignRequest(null); setModal(null); }}
+      onSubmit={confirmSign}
+    />}
     {modal === 'export' && wallet && <ExportModal wallet={wallet} vault={vault} onClose={() => setModal(null)} onCopy={copy} onDownload={downloadBackup} />}
     {modal === 'keys' && wallet && <Modal title="Wallet key management" onClose={() => setModal(null)}><div className="space-y-3"><div className="rounded-xl border border-white/[.06] bg-black/20 p-4"><p className="text-[9px] uppercase tracking-[.15em] text-[#77756e]">Public address</p><p className="mono mt-2 break-all text-xs leading-5 text-[#d6d0c3]">{wallet.publicKey}</p></div><div className="flex flex-wrap gap-2"><button onClick={() => setModal('export')} className="gold-button inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold"><ArrowDownToLine size={14} /> Export / Copy Private Key</button><button onClick={() => setModal('import')} className="quiet-button inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs"><KeyRound size={14} /> Import another key</button></div><p className="text-[10px] leading-5 text-amber-200/70">Never share your secret key. This software has not been independently audited.</p></div></Modal>}
   </div>;
@@ -662,9 +714,54 @@ function KeyModal({ title, action, onClose, onSubmit }) {
   return <Modal title={title} onClose={onClose}><p className="text-sm leading-6 text-[#aaa598]">Paste the base64-encoded 64-byte Ed25519 secret key. Key material is processed locally and never sent to the node.</p><textarea autoComplete="off" spellCheck="false" className="field mono mt-4 min-h-28 resize-y rounded-xl p-3 text-xs" placeholder="Base64 private key" value={value} onChange={event => setValue(event.target.value)} /><div className="mt-4 flex justify-end"><button disabled={!value.trim()} onClick={() => onSubmit(value)} className="gold-button rounded-lg px-4 py-2.5 text-xs font-semibold disabled:opacity-40">{action}</button></div></Modal>;
 }
 
+function PasswordModal({ title, action, description, onClose, onSubmit, confirm = true }) {
+  const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [error, setError] = useState('');
+  const [working, setWorking] = useState(false);
+
+  const submit = async event => {
+    event.preventDefault();
+    setError('');
+    if (password.length < 12) {
+      setError('Use a password with at least 12 characters.');
+      return;
+    }
+    if (confirm && confirmation !== password) {
+      setError('Passwords do not match.');
+      return;
+    }
+    setWorking(true);
+    try {
+      await onSubmit(password);
+      setPassword('');
+      setConfirmation('');
+      onClose();
+    } catch (submitError) {
+      setError(submitError.message || 'The wallet could not be protected.');
+    } finally {
+      setWorking(false);
+    }
+  };
+
+  return <Modal title={title} onClose={onClose}>
+    <p className="text-sm leading-7 text-[#b8b2a5]">{description}</p>
+    <form onSubmit={submit} className="mt-5 space-y-4">
+      <label className="block"><span className="mb-2 block text-[10px] uppercase tracking-[.12em] text-[#77756e]">Wallet password</span>
+        <input type="password" autoComplete="new-password" className="field w-full rounded-lg px-3 py-3 text-xs" value={password} onChange={event => setPassword(event.target.value)} required autoFocus />
+      </label>
+      {confirm && <label className="block"><span className="mb-2 block text-[10px] uppercase tracking-[.12em] text-[#77756e]">Confirm password</span>
+        <input type="password" autoComplete="new-password" className="field w-full rounded-lg px-3 py-3 text-xs" value={confirmation} onChange={event => setConfirmation(event.target.value)} required />
+      </label>}
+      {error && <p role="alert" className="text-xs text-red-300">{error}</p>}
+      <div className="flex justify-end gap-2"><button type="button" onClick={onClose} className="quiet-button rounded-lg px-4 py-2.5 text-xs">Cancel</button><button disabled={working} className="gold-button rounded-lg px-4 py-2.5 text-xs font-semibold disabled:opacity-40">{working ? 'Working…' : action}</button></div>
+    </form>
+  </Modal>;
+}
+
 function ExportModal({ wallet, vault, onClose, onCopy, onDownload }) {
   const [revealed, setRevealed] = useState(false);
-  const [revealedSecretKey, setRevealedSecretKey] = useState(wallet.secretKey || null);
+  const [revealedSecretKey, setRevealedSecretKey] = useState(null);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -685,8 +782,11 @@ function ExportModal({ wallet, vault, onClose, onCopy, onDownload }) {
   };
 
   const backup = () => {
-    const content = vault || { publicKey: wallet.publicKey, secretKey: revealedSecretKey };
-    onDownload(`bnkr-wallet-${wallet.publicKey.slice(0, 8)}.json`, content);
+    if (!vault) {
+      alert('Set a wallet password first. Plaintext key export is disabled.');
+      return;
+    }
+    onDownload(`bnkr-wallet-${wallet.publicKey.slice(0, 8)}.json`, vault);
   };
 
   return <Modal title="Back up your private key" onClose={onClose}>
