@@ -29,6 +29,7 @@ function usage() {
     'Options:',
     '  --origin <url>   Node API origin (default: BNKR_NODE_URL or http://127.0.0.1:4174)',
     '  --blocks <n>     Blocks to mine; 0 means until stopped (default: 1)',
+    '  --timeout <ms>   Per-request timeout in milliseconds (default: 60000)',
     '  --help           Show this message'
   ].join('\n');
 }
@@ -43,6 +44,8 @@ try {
   const miner = arg('miner');
   const blocksRaw = arg('blocks', '1');
   const blocksParsed = Number.parseInt(blocksRaw, 10);
+  const timeoutRaw = arg('timeout', '60000');
+  const timeoutMs = Number.parseInt(timeoutRaw, 10);
 
   if (!miner) throw new Error('A --miner public key is required.');
   if (Buffer.from(miner, 'base64').length !== 32) {
@@ -50,6 +53,9 @@ try {
   }
   if (!Number.isInteger(blocksParsed) || blocksParsed < 0) {
     throw new Error('--blocks must be a non-negative integer.');
+  }
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0) {
+    throw new Error('--timeout must be a positive integer in milliseconds.');
   }
 
   const maxBlocks = blocksParsed === 0 ? Infinity : blocksParsed;
@@ -62,7 +68,7 @@ try {
   async function getJson(url, init = {}) {
     const response = await fetch(url, {
       ...init,
-      signal: AbortSignal.timeout(15_000)
+      signal: AbortSignal.timeout(timeoutMs)
     });
     const text = await response.text();
     let body = null;
@@ -72,7 +78,10 @@ try {
   }
 
   let mined = 0;
-  console.log(`BNKR CLI miner -> ${origin} (${maxBlocks === Infinity ? 'continuous' : `${maxBlocks} block(s)`})`);
+  console.log(
+    `BNKR CLI miner -> ${origin} ` +
+    `(${maxBlocks === Infinity ? 'continuous' : `${maxBlocks} block(s)`}, timeout ${timeoutMs}ms)`
+  );
 
   while (running && mined < maxBlocks) {
     const query = new URLSearchParams({ miner });
