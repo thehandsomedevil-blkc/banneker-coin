@@ -1972,6 +1972,13 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     });
   }
 
+  async function removePeer(url) {
+    await client.execute({
+      sql: "DELETE FROM peers WHERE url = ?",
+      args: [url]
+    });
+  }
+
   async function isPeerBanned(identifier) {
     const result = await client.execute({
       sql: "SELECT score, banned_until AS bannedUntil, reason FROM peer_bans WHERE identifier = ?",
@@ -2090,6 +2097,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     miningTemplate,
     networkState,
     recordPeerFault,
+    removePeer,
     replaceChain,
     updatePeer,
     validateStoredChain

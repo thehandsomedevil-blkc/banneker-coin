@@ -199,6 +199,8 @@ test('Node B bootstraps from Node A with bidirectional registration and chain sy
       ]);
       assert.equal(infoA.peers, 1);
       assert.equal(infoB.peers, 1);
+      assert.match(infoA.instanceId, /^[0-9a-f-]{36}$/i);
+      assert.notEqual(infoA.instanceId, infoB.instanceId, 'each process needs a distinct node ID');
       assert.equal(stateA.latestBlock.hash, stateB.latestBlock.hash);
       assert.equal(stateA.checkpointState, stateB.checkpointState);
       assert.notEqual(stateB.checkpointState, 'VIOLATED');

@@ -1,4 +1,5 @@
 import express from 'express';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
@@ -93,6 +94,11 @@ const MAX_PEER_LIST_RESPONSE_BYTES = 64 * 1024;
 const { buildId, sourceCommit } = resolveBuildIdentity();
 const storageKind = process.env.TURSO_DATABASE_URL ? 'turso' : 'local';
 const buildIdentity = Object.freeze({ buildId, sourceCommit, storage: storageKind });
+
+// A per-process ID lets a node recognize its own public URL even when
+// PUBLIC_URL is missing. URL-based self checks only know the local fallback
+// origin, so a hosted node could otherwise learn its own Render URL as a peer.
+const instanceId = randomUUID();
 
 const PERMANENT_SYNC_CODES = new Set([
   'PEER_ADDRESS_BLOCKED',
@@ -537,6 +543,29 @@ async function discoverTransitivePeers() {
     discoveryInFlight.add(source);
     try {
       await assertPeerHostAllowed(new URL(source).hostname, { allowPrivate: allowPrivatePeers });
+
+      // A hosted node without PUBLIC_URL cannot recognize its own external
+      // hostname by URL. The per-process ID is authoritative: if this source
+      // answers with our ID, the entry is stale self-peering and is removed.
+      let self = false;
+      try {
+        const info = await fetchPeerJson(`${source}/api/node`, {
+          maxBytes: PEER_LIMITS.maxPeerNodeInfoBytes,
+          timeoutMs: 5_000,
+          allowPrivate: allowPrivatePeers
+        });
+        self = info?.instanceId === instanceId;
+      } catch (error) {
+        console.warn(`Self-check for ${source} failed: ${error?.message || error}`);
+      }
+      if (self) {
+        await ledger.removePeer(source);
+        known.delete(source);
+        verifiedDiscoveryOrigins.delete(source);
+        console.log(`Removed self peer ${source}.`);
+        continue;
+      }
+
       const payload = await fetchPeerJson(`${source}/api/peers`, {
         maxBytes: MAX_PEER_LIST_RESPONSE_BYTES,
         timeoutMs: 5_000,
@@ -563,6 +592,7 @@ async function discoverTransitivePeers() {
             timeoutMs: 5_000,
             allowPrivate: allowPrivatePeers
           });
+          if (info?.instanceId === instanceId) continue;
           if (!isCompatiblePeerInfo(info)) throw new Error('incompatible BNKR peer identity');
           await ledger.addPeer(origin);
           verifiedDiscoveryOrigins.add(origin);
@@ -718,6 +748,7 @@ app.get('/api/node', asyncRoute(async (_req, res) => {
   res.json({
     name: 'The Banneker Coin',
     ticker: 'BNKR',
+    instanceId,
     ...buildIdentity,
     networkId: identity.networkId,
     protocolVersion: identity.protocolVersion,
