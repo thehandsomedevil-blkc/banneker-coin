@@ -6,6 +6,22 @@
 
 ---
 
+## Current network status
+
+BNKR currently runs a converged three-node mutual mesh on `BNKR-MAINNET-V1`:
+
+| Service | Role |
+|---|---|
+| `https://banneker-coin.onrender.com` | Canonical source of truth |
+| `https://the-black-coin.onrender.com` | Published seed / peer |
+| `https://banneker-coin-node-b.onrender.com` | Published seed / peer |
+
+V2 is compiled and network-bound, but **activates at block `5000`**. Mainnet checkpoints are `731` and `2500`. These are hosted nodes operated by the project; the network is **not yet decentralized in the operator sense**. Independent external operators running their own nodes are what make that claim true. See [`NODE_OPERATOR_GUIDE.md`](NODE_OPERATOR_GUIDE.md) to join.
+
+Historical audit and V2 design documents in this repository describe earlier points in time; BLKC references there document the project's lineage and are not current branding.
+
+---
+
 ## Honoring Benjamin Banneker
 
 **The Banneker Coin (BNKR)** honors Benjamin Banneker, the self-taught African American mathematician, astronomer, and clockmaker from Baltimore County, Maryland. His legacy of mathematical rigor, careful observation, and precise timekeeping inspires this open monetary protocol.
@@ -32,6 +48,7 @@ BNKR strips all of that out as a sovereign, peer-to-peer digital cash network wi
 | Parameter | Specification |
 | :--- | :--- |
 | **Ticker** | `BNKR` |
+| **Network ID** | `BNKR-MAINNET-V1` |
 | **Maximum Supply** | `21,000,000 BNKR` (Hard Cap) |
 | **Initial Block Reward** | `50 BNKR` |
 | **Halving Schedule** | Every `210,000` blocks (height-only; unchanged at V2) |
@@ -41,45 +58,33 @@ BNKR strips all of that out as a sovereign, peer-to-peer digital cash network wi
 | **Mainnet Checkpoint 1** | Height `731` — `000053a9cf7c99c05150709c0850e044cb0e634b3e462ca18377b548080ed2f8` |
 | **Mainnet Checkpoint 2** | Height `2500` — `000004f48c5efffd42058140ba6532eeff322a33871a030ce4aefb54bdc38dd7` |
 | **Signatures** | Ed25519 Client-Side Local Signing |
-| **Official Seed Node** | `https://banneker-coin.onrender.com` |
+| **Published Seed Nodes** | `https://banneker-coin.onrender.com`, `https://the-black-coin.onrender.com`, `https://banneker-coin-node-b.onrender.com` |
 
 ---
 
 ## Run an Independent BNKR Node
 
-No one grants a node its authority. A node earns it by checking every block, every signature, and the checkpoint that anchors the Era 1 chain. If the chain disagrees with the compiled rules, your node should refuse it — not ask you to trust it.
+No one grants a node its authority. A node earns it by checking every block, every signature, and the checkpoints that anchor the Era 1 chain. If the chain disagrees with the compiled rules, your node should refuse it — not ask you to trust it.
 
-### 1. Get the Code
+### 1. One-command Docker node
 
 ```bash
 git clone https://github.com/thehandsomedevil-blkc/banneker-coin.git
 cd banneker-coin
-npm install
+PUBLIC_URL=https://bnkr.example.com docker compose up -d --build
 ```
 
-### 2. Connect to the Peer Network and Start
+`docker-compose.yml` already configures all three published seeds and a persistent SQLite volume. Set `PUBLIC_URL` to your exact external HTTPS origin so peers can register with you. For reverse-proxy, health-check, and CLI-mining details, see [`NODE_OPERATOR_GUIDE.md`](NODE_OPERATOR_GUIDE.md).
 
-Quick-start form (replace `https://onrender.com` with the published seed URL for your deployment):
+### 2. Three-line Node.js node
 
 ```bash
-BANNEKER_PEERS=https://onrender.com npm start
+git clone https://github.com/thehandsomedevil-blkc/banneker-coin.git && cd banneker-coin
+npm install && npm run build
+PUBLIC_URL=https://bnkr.example.com SEED_PEERS=https://banneker-coin.onrender.com,https://the-black-coin.onrender.com,https://banneker-coin-node-b.onrender.com DB_PATH=$PWD/bnkr.db npm start
 ```
 
-Current published BNKR seed used by this repository:
-
-```bash
-BANNEKER_PEERS=https://banneker-coin.onrender.com npm start
-```
-
-Windows equivalents for the published seed:
-
-```cmd
-set BANNEKER_PEERS=https://banneker-coin.onrender.com && npm start
-```
-
-```powershell
-$env:BANNEKER_PEERS="https://banneker-coin.onrender.com"; npm start
-```
+Keep `DB_PATH` on persistent storage. Never set `ALLOW_LOCAL_PEERS=true` on a public node.
 
 ### 3. Verify From Your Own Node — Trust Nothing
 
@@ -134,7 +139,8 @@ Visit `http://localhost:4174` in your browser to:
 
 ## Verify Everything - Trust Nothing
 
-- **Live Explorer & Seed Node:** [https://banneker-coin.onrender.com](https://banneker-coin.onrender.com)
+- **Canonical Explorer & Seed:** [https://banneker-coin.onrender.com](https://banneker-coin.onrender.com)
+- **Additional Seeds:** [https://the-black-coin.onrender.com](https://the-black-coin.onrender.com), [https://banneker-coin-node-b.onrender.com](https://banneker-coin-node-b.onrender.com)
 - **Run Consensus & Security Tests:**
   ```bash
   npm test

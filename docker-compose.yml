@@ -1,0 +1,29 @@
+services:
+  bnkr-node:
+    build: .
+    image: banneker-coin:local
+    restart: unless-stopped
+    ports:
+      - "${BNKR_BIND:-0.0.0.0}:${BNKR_PORT:-4174}:4174"
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: "4174"
+      DB_PATH: /data/bnkr.db
+      ALLOW_LOCAL_PEERS: "false"
+      # Exact external HTTPS origin peers should use to reach this node.
+      # Set PUBLIC_URL in .env before starting; an empty value still serves the
+      # UI and learns peers transitively, but cannot register the reverse edge.
+      PUBLIC_URL: ${PUBLIC_URL:-}
+      SEED_PEERS: https://banneker-coin.onrender.com,https://the-black-coin.onrender.com,https://banneker-coin-node-b.onrender.com
+    volumes:
+      - bnkr-data:/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4174/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+
+volumes:
+  bnkr-data:

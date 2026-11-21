@@ -1,19 +1,50 @@
 # BNKR — Protocol V2 Correction Specification
 
-## Independent Review Remediation — Design Only
+## Historical Independent Review Remediation
 
-**Project:** Banneker Koin (BNKR)
+**Project:** The Banneker Coin (BNKR)
 **Repository:** `https://github.com/thehandsomedevil-blkc/banneker-coin`
 **Remediation input:** `BNKR_PROTOCOL_V2_INDEPENDENT_REVIEW.md` (5 blockers, 29 corrections C-01…C-29, 26 missing tests M-01…M-26)
 **Specification under correction:** `BNKR_NETWORK_IDENTITY_PROTOCOL_V2_SPECIFICATION.md` (1,626 lines)
 **Evidence inputs:** `BNKR_NETWORK_IDENTITY_PROTOCOL_AUDIT_2026-11-17.md`, `BNKR_PHASE1_REVIEW_AND_P0_PLAN_2026-11-17.md`, `SECURITY_AUDIT_PART_C_2026-11-17.md`, `BNKR_TURSO_PRODUCTION_DATABASE_AUDIT_2026-11-17.md`
 
-> **STATUS: DESIGN ONLY. NOTHING IMPLEMENTED, MODIFIED, DEPLOYED, COMMITTED, OR EXECUTED.**
-> This document corrects a *specification*. It does not correct a *network*. V2 is not implemented, not active, and not on testnet. BNKR is not network-bound, not isolated from BLKC, and not decentralized. No source file, database, genesis value, network identifier, checkpoint, activation height, or production configuration was changed. All three databases were SHA-256 verified before and after writing; see §22.6.
->
-> **Baseline correction of record:** the `accountsValid` capability exists **only as an uncommitted working-tree change**. It is absent from commit `908c642` and therefore cannot exist in any deployed build produced from that commit. The original V2 specification's "verified baseline" partly describes the working tree, not production. §11 separates five baselines explicitly, and every capability claim below is labelled with the baseline it comes from.
->
-> **Current-state note (2026-11-19).** The design-only review below remains the historical record. The current compiled configuration is `V2_ACTIVATION_HEIGHT = 5000` with Mainnet Checkpoints at heights `731` and `2500`; startup recovery uses a binary search over the rollback point instead of the old linear replay. §21.2, §21.3, and §21.9 are authoritative for current values. No mainnet database was modified.
+> **HISTORICAL DOCUMENT.** This file preserves the point-in-time V2 design review
+> and its findings. Statements such as "design only", "zero peers", "not
+> implemented", or "not decentralized" below describe that review's baseline and
+> are **not current network claims**. The current status in the next section
+> supersedes them. BLKC references in the historical findings document project
+> lineage and are not current branding.
+
+## Current network status (2026-11-21)
+
+| Item | Current value |
+|---|---|
+| Brand | **The Banneker Coin (BNKR)** |
+| Network ID | `BNKR-MAINNET-V1` |
+| V2 activation height | `5000` (not yet reached; Era 1 rules remain active below it) |
+| Mainnet checkpoints | `731` and `2500`, both `APPLICABLE` on the live chain |
+| Canonical source of truth | `https://banneker-coin.onrender.com` |
+| Live seed nodes | `https://banneker-coin.onrender.com`, `https://the-black-coin.onrender.com`, `https://banneker-coin-node-b.onrender.com` |
+| Live mesh | Full mutual three-node mesh on commit `a874d4a` — exactly two peers per node, no self peers |
+| Live height at verification | `2858`; all nodes share tip `0000351797b77d294d0aa23852f7235691d028981093b67e5eed0aeb32e14968` |
+| Operational decentralization | Not yet achieved: these are project-hosted nodes. Independent operators with separate hosts, databases, and keys are required. |
+| Join the network | See [`NODE_OPERATOR_GUIDE.md`](NODE_OPERATOR_GUIDE.md) for Docker, reverse proxy, health checks, and CLI mining. |
+
+The implementation now includes the registration retry, transitive discovery,
+ungated discovery, and per-process `instanceId` self-peer pruning that the
+historical review said did not exist. No consensus constant, genesis value,
+checkpoint, V2 activation height, or database was changed by those fixes. See
+[`BNKR_NODE_RECOVERY_RUNBOOK.md`](BNKR_NODE_RECOVERY_RUNBOOK.md) for read-only
+live verification and recovery.
+
+### Historical baseline note
+
+The original review treated `accountsValid` as an uncommitted working-tree change
+absent from commit `908c642`, and described the compiled configuration before the
+current values were settled. Those statements remain in the body as evidence. The
+current compiled configuration is `V2_ACTIVATION_HEIGHT = 5000` with Mainnet
+Checkpoints at heights `731` and `2500`; no mainnet database was modified by this
+document.
 
 ### Label conventions
 
@@ -79,7 +110,10 @@ The original V2 design has the right objective — bind network identity into th
 | **B-4** | No checkpoint continuity across releases; a later binary can ratify a conflicting fork (R-04, C-05) | §9: append-only set, monotonic ancestry, derivation script, publication-before-use, manifest digest, conflict refusal, N-of-M attestation proposal, operator rejection | **RESOLVED AS SPECIFICATION; governance parameters are [Owner decision]** |
 | **B-5** | Deployed build lacks `accountsValid`; baseline conflates deployed, `HEAD`, working tree, Phase 1, and V2 (R-05, C-19) | §11–§12: five-baseline evidence table; no capability called deployed without production evidence; fail-closed production design; build identity required | **RESOLVED AS SPECIFICATION; production facts remain [Unverified]** |
 
-### 1.4 Readiness verdict
+### 1.4 Readiness verdict (historical, at review time)
+
+The table below records the verdict at the time of the independent review. It is
+not the current network status; see **Current network status (2026-11-21)** above.
 
 | Question | Verdict |
 |---|---|
@@ -88,7 +122,7 @@ The original V2 design has the right objective — bind network identity into th
 | Is the *specification* complete enough to implement monetary validation? | **Yes.** §15 specifies the existing rules and the tests; no economic rule is changed. |
 | Is the *network* ready for implementation or testnet? | **No.** No second node, no second implementation, no measured miner diversity, no derived checkpoint, no deployment evidence. |
 | Can BNKR survive founder disappearance today? | **No.** Nothing in the code calls the founder at runtime, but there is no distributable full node, no seed/discovery, no derivation script, and no second operator. |
-| Is BNKR decentralized? | **No.** One hosted API, one database provider, one implementation, zero peers, founder-selected checkpoints. This document does not change that. |
+| Is BNKR decentralized? | **No (historical review-time verdict).** One hosted API, one database provider, one implementation, zero peers at that time, founder-selected checkpoints. This document does not change that. |
 
 **One-sentence verdict:** the corrections make V2 *implementable as a specification*; they do not make BNKR *independent as a network*, and no testnet should be scheduled until a second operator validates today's code and a second implementation reproduces the vectors.
 

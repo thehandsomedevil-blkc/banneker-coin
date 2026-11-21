@@ -21,12 +21,14 @@ services:
         value: 0.0.0.0
       - key: DB_PATH
         value: /var/lib/bnkr/node-b.db
-      # Change this to the real Render URL assigned to Node B.
+      # Exact external HTTPS origin for this service. For a different operator,
+      # replace this with the service's real Render URL.
       - key: PUBLIC_URL
-        value: https://bnkr-node-b.onrender.com
-      # Seed A registers B via POST /api/peers, making discovery bidirectional.
+        value: https://banneker-coin-node-b.onrender.com
+      # All peers except this node. Registration creates reverse edges and
+      # discovery also learns transitive peers from the seeds.
       - key: SEED_PEERS
-        value: https://banneker-coin.onrender.com
+        value: https://banneker-coin.onrender.com,https://the-black-coin.onrender.com
       # Never enable private peers in production.
       - key: ALLOW_LOCAL_PEERS
         value: "false"
