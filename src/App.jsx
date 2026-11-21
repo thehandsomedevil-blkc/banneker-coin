@@ -533,16 +533,16 @@ export default function App() {
   const latest = state?.latestBlock;
 
   return <div className="min-h-screen">
-    <header className="border-b border-white/[.06]">
+    <header className="site-header border-b border-white/[.06]">
       <div className="mx-auto max-w-[1440px] px-5 py-5 sm:px-8 lg:px-12">
         <div className="flex flex-wrap items-center justify-between gap-5">
           <div className="flex items-center gap-4">
             <CoinEmblem />
             <div><p className="font-display text-xl font-semibold tracking-[.09em] text-[#eee8d8]">THE BANNEKER COIN</p><p className="mt-0.5 text-[9px] uppercase tracking-[.25em] text-[#77756e]">An open monetary protocol <span className="px-1 text-gold">·</span> BNKR</p></div>
           </div>
-          <div className="flex items-center gap-3">
-            <button onClick={() => setModal('whitepaper')} className="quiet-button inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs"><FileKey2 size={14} /> Whitepaper</button>
-            {wallet ? <button onClick={() => setModal('keys')} className="inline-flex items-center gap-2 rounded-lg border border-[#d4af3733] bg-[#d4af370b] px-3 py-2.5 text-xs text-gold"><Fingerprint size={14} /> Wallet <span className="mono text-[#a8a397]">{short(wallet.publicKey)}</span></button> :
+          <div className="header-actions flex items-center gap-3">
+            <button onClick={() => setModal('whitepaper')} className="header-action-button inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs"><FileKey2 size={14} /> Whitepaper</button>
+            {wallet ? <button onClick={() => setModal('keys')} className="header-action-button inline-flex items-center gap-2 rounded-lg px-3 py-2.5 text-xs"><Fingerprint size={14} /> Wallet <span className="mono text-[#a8a397]">{short(wallet.publicKey)}</span></button> :
               <button onClick={() => setModal('wallet')} className="gold-button inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold"><Plus size={14} /> Generate Wallet</button>}
           </div>
         </div>
