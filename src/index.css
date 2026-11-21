@@ -22,7 +22,7 @@ body {
   min-height: 100vh;
   background-color: #09090b;
   background-image:
-    linear-gradient(180deg, rgba(6, 8, 12, .18) 0%, rgba(6, 8, 12, .10) 30%, rgba(6, 8, 12, .38) 100%),
+    linear-gradient(rgba(9, 9, 11, .25), rgba(9, 9, 11, .45)),
     url('/bnkr-bg.png');
   background-repeat: no-repeat;
   background-position: center;
@@ -30,8 +30,14 @@ body {
   background-attachment: fixed;
 }
 .site-header {
-  /* Semi-transparent so the Baltimore skyline stays visible behind the masthead. */
-  background: linear-gradient(180deg, rgba(6, 8, 12, .32) 0%, rgba(6, 8, 12, .12) 100%);
+  /* Baltimore skyline artwork lives only behind the masthead; the page keeps
+     the original astronomical backdrop. */
+  background-image:
+    linear-gradient(105deg, rgba(6, 8, 12, .66) 0%, rgba(6, 8, 12, .26) 55%, rgba(6, 8, 12, .58) 100%),
+    url('/bnkr-header-bg.jpg');
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
 }
 .header-actions {
   padding: 6px;
