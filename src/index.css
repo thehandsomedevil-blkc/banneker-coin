@@ -120,6 +120,80 @@ button { cursor: pointer; }
   user-select: none;
 }
 .coin-emblem__face--back { transform: rotateY(180deg); }
+
+/* Enlarged coin: one physical coin with two faces, a minted rim and a slow float. */
+.coin-enlarge-float {
+  display: block;
+  animation: coinEnlargeFloat 6s ease-in-out infinite alternate;
+  will-change: transform;
+}
+.coin-enlarge-stage {
+  --coin-size: min(76vh, 88vw, 520px);
+  position: relative;
+  display: block;
+  width: var(--coin-size);
+  height: var(--coin-size);
+  perspective: 1400px;
+}
+.coin-enlarge-orient,
+.coin-enlarge-spin {
+  position: absolute;
+  inset: 0;
+  transform-style: preserve-3d;
+}
+.coin-enlarge-orient { transition: transform .6s cubic-bezier(.2, .7, .2, 1); }
+.coin-enlarge-orient.is-flipped { transform: rotateY(180deg); }
+.coin-enlarge-spin {
+  animation: coinEnlargeSpin 28s linear infinite;
+  will-change: transform;
+}
+.coin-enlarge-face {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  object-fit: contain;
+  border: 3px solid #9c7a3c;
+  box-shadow: inset 0 0 0 2px #d4b475;
+  border-radius: 50%;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  user-select: none;
+  pointer-events: none;
+}
+.coin-enlarge-face--front { transform: translateZ(6.5px); }
+.coin-enlarge-face--back { transform: rotateY(180deg) translateZ(6.5px); }
+.coin-enlarge-highlight {
+  position: absolute;
+  inset: 3px;
+  box-sizing: border-box;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 2px #d4b475;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  pointer-events: none;
+}
+.coin-enlarge-highlight--front { transform: translateZ(7px); }
+.coin-enlarge-highlight--back { transform: rotateY(180deg) translateZ(7px); }
+.coin-enlarge-rim {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  border-radius: 2px;
+  background: repeating-linear-gradient(to bottom, #1a140b 0px, #8c6a2e 1.5px, #d4b475 2.5px, #6e5220 4px, #120e07 5.5px);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
+@keyframes coinEnlargeFloat {
+  from { transform: translateY(-10px); }
+  to { transform: translateY(10px); }
+}
+@keyframes coinEnlargeSpin {
+  from { transform: rotateY(0deg); }
+  to { transform: rotateY(360deg); }
+}
+
 .scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
 .scrollbar::-webkit-scrollbar-thumb { background: #403a29; border-radius: 6px; }
 

@@ -33,6 +33,10 @@ import {
 
 const HALVING_INTERVAL = 210_000;
 const NETWORK_ID = 'BNKR-MAINNET-V1';
+const COIN_RIM_SEGMENTS = Array.from(
+  { length: 48 },
+  (_, index) => `rotateZ(${index * 7.5 + 90}deg) rotateX(90deg) translateZ(calc(var(--coin-size) * 0.5))`
+);
 const CONTACTS_KEY = 'bnkr.contacts.v1';
 const QUICKSTART_KEY = 'bnkr.quickstart.dismissed';
 const OLD_CONTACTS_KEY = 'blkc.contacts.v1';
@@ -131,22 +135,16 @@ function IconButton({ icon: Icon, children, ...props }) {
   </button>;
 }
 
-function CoinEmblem() {
-  const [pinned, setPinned] = useState(false);
-  const [hovered, setHovered] = useState(false);
-  const flipped = pinned || hovered;
-
+function CoinEmblem({ flipped, onToggle, onZoom }) {
   return <button
     type="button"
     className={`coin-emblem${flipped ? ' is-flipped' : ''}`}
-    onMouseEnter={() => setHovered(true)}
-    onMouseLeave={() => setHovered(false)}
-    onClick={() => setPinned(value => !value)}
-    onFocus={() => setHovered(true)}
-    onBlur={() => setHovered(false)}
-    aria-label="Flip the BNKR coin to see its reverse"
-    aria-pressed={pinned}
-    title="Flip coin"
+    onMouseEnter={onZoom}
+    onFocus={onZoom}
+    onClick={() => { onToggle(); onZoom(); }}
+    aria-label="Enlarge the BNKR coin; click to flip front and reverse"
+    aria-pressed={flipped}
+    title="Enlarge / flip coin"
   >
     <span className="coin-emblem__inner">
       <img className="coin-emblem__face coin-emblem__face--front" src="/bnkr-coin-front.png" alt="" draggable="false" />
@@ -235,6 +233,8 @@ export default function App() {
   const [peerUrl, setPeerUrl] = useState('');
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(false);
+  const [coinFlipped, setCoinFlipped] = useState(false);
+  const [coinZoom, setCoinZoom] = useState(false);
   const workerRef = useRef(null);
   const miningRef = useRef(false);
   const searchTimer = useRef(null);
@@ -242,6 +242,15 @@ export default function App() {
   useEffect(() => {
     migrateStorageKey(QUICKSTART_KEY, OLD_QUICKSTART_KEY);
   }, []);
+
+  useEffect(() => {
+    if (!coinZoom) return undefined;
+    const closeOnEscape = event => {
+      if (event.key === 'Escape') setCoinZoom(false);
+    };
+    window.addEventListener('keydown', closeOnEscape);
+    return () => window.removeEventListener('keydown', closeOnEscape);
+  }, [coinZoom]);
 
   useEffect(() => {
     if (needsMigration) setModal('migrate');
@@ -540,10 +549,7 @@ export default function App() {
       <div className="mx-auto max-w-[1440px] px-5 py-5 sm:px-8 lg:px-12">
         <div className="flex flex-wrap items-center justify-between gap-5">
           <div className="flex items-center gap-4">
-            <div className="flex items-center gap-2">
-              <CoinEmblem />
-              <img src="/banneker-emblem.svg" alt="Banneker Coin astrolabe emblem" className="h-9 w-9 shrink-0" draggable="false" />
-            </div>
+            <img src="/banneker-emblem.svg" alt="Banneker Coin astrolabe emblem" className="h-9 w-9 shrink-0" draggable="false" />
             <div><p className="font-display text-xl font-semibold tracking-[.09em] text-[#eee8d8]">THE BANNEKER COIN</p><p className="mt-0.5 text-[9px] uppercase tracking-[.25em] text-[#77756e]">An open monetary protocol <span className="px-1 text-gold">·</span> BNKR</p></div>
           </div>
           <div className="header-actions flex items-center gap-3">
@@ -565,6 +571,11 @@ export default function App() {
           <div><p className="text-[9px] uppercase tracking-[.17em] text-[#77756e]">Integrity check</p><div className={`mt-2 flex items-center gap-1.5 text-xs font-medium ${verified ? 'text-emerald-400' : 'text-red-400'}`}>{verified ? <ShieldCheck size={14} /> : <CircleAlert size={14} />}{verified === null ? 'Checking…' : verified ? 'Chain Verified ✓' : 'Chain Invalid'}</div></div><RefreshCw size={14} className="text-[#77756e]" />
         </button>
         <Telemetry label="Connected peers" icon={Globe2} value={state?.peers?.length ?? '0'} detail="node connections" />
+        <div className="glass-card flex min-h-[92px] flex-col items-center justify-center gap-2 rounded-xl px-4 py-3 text-center lg:col-start-6">
+          <p className="text-[9px] uppercase tracking-[.17em] text-[#77756e]">Banneker Coin</p>
+          <CoinEmblem flipped={coinFlipped} onToggle={() => setCoinFlipped(value => !value)} onZoom={() => setCoinZoom(true)} />
+          <p className="text-[9px] text-[#c8bfaa]">Flip Front/Reverse Mint</p>
+        </div>
       </section>
 
       <div className="mb-8 grid gap-3 sm:grid-cols-2">
@@ -705,6 +716,26 @@ export default function App() {
     />}
     {modal === 'export' && wallet && <ExportModal wallet={wallet} vault={vault} onClose={() => setModal(null)} onCopy={copy} onDownload={downloadBackup} />}
     {modal === 'keys' && wallet && <Modal title="Wallet key management" onClose={() => setModal(null)}><div className="space-y-3"><div className="rounded-xl border border-white/[.06] bg-black/20 p-4"><p className="text-[9px] uppercase tracking-[.15em] text-[#77756e]">Public address</p><p className="mono mt-2 break-all text-xs leading-5 text-[#d6d0c3]">{wallet.publicKey}</p></div><div className="flex flex-wrap gap-2"><button onClick={() => setModal('export')} className="gold-button inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs font-semibold"><ArrowDownToLine size={14} /> Export / Copy Private Key</button><button onClick={() => setModal('import')} className="quiet-button inline-flex items-center gap-2 rounded-lg px-4 py-2.5 text-xs"><KeyRound size={14} /> Import another key</button></div><p className="text-[10px] leading-5 text-amber-200/70">Never share your secret key. This software has not been independently audited.</p></div></Modal>}
+
+    {coinZoom && <div role="dialog" aria-modal="true" aria-label="Banneker Coin enlarged" className="fixed inset-0 z-[80] flex flex-col items-center justify-center gap-4 bg-transparent p-6" onClick={() => setCoinZoom(false)}>
+      <button type="button" aria-label="Close enlarged coin" onClick={() => setCoinZoom(false)} className="absolute right-5 top-5 rounded-lg border border-white/10 bg-black/40 p-2 text-[#c8bfaa] transition hover:border-gold/50 hover:text-gold"><X size={20} /></button>
+      <button type="button" aria-label="Flip the enlarged BNKR coin" onClick={event => { event.stopPropagation(); setCoinFlipped(value => !value); }} className="rounded-full">
+        <span className="coin-enlarge-float">
+          <span className="coin-enlarge-stage">
+            <span className={`coin-enlarge-orient${coinFlipped ? ' is-flipped' : ''}`}>
+              <span className="coin-enlarge-spin">
+                {COIN_RIM_SEGMENTS.map((transform, index) => <span key={index} className="coin-enlarge-rim" style={{ width: 'calc(var(--coin-size) * 0.073)', height: '14px', transform }} />)}
+                <img className="coin-enlarge-face coin-enlarge-face--front" src="/bnkr-coin-front.png" alt="BNKR coin front, high resolution" draggable="false" />
+                <span className="coin-enlarge-highlight coin-enlarge-highlight--front" />
+                <img className="coin-enlarge-face coin-enlarge-face--back" src="/bnkr-coin-back.png" alt="BNKR coin reverse, high resolution" draggable="false" />
+                <span className="coin-enlarge-highlight coin-enlarge-highlight--back" />
+              </span>
+            </span>
+          </span>
+        </span>
+      </button>
+      <p className="rounded-full border border-white/10 bg-black/55 px-4 py-2 text-center text-[10px] uppercase tracking-[.16em] text-[#c8bfaa] backdrop-blur-sm">Click the coin to flip front / reverse · Click outside or press Esc to close</p>
+    </div>}
   </div>;
 }
 
