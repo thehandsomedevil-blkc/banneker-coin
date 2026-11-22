@@ -1,0 +1,122 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 240 240" width="96" height="96" role="img" aria-label="Banneker Coin Obsidian and Gold Astrolabe Emblem">
+  <defs>
+    <!-- Sovereign Gold Gradient -->
+    <linearGradient id="bnkrGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FDE047"/>
+      <stop offset="50%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#B45309"/>
+    </linearGradient>
+
+    <!-- Deep Bronze-Gold Shadow Ring -->
+    <linearGradient id="bnkrBronze" x1="100%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%" stop-color="#D97706"/>
+      <stop offset="50%" stop-color="#92400E"/>
+      <stop offset="100%" stop-color="#F59E0B"/>
+    </linearGradient>
+
+    <!-- Celestial Radial Glow -->
+    <radialGradient id="bnkrCoreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#FDE047" stop-opacity="0.35"/>
+      <stop offset="65%" stop-color="#F59E0B" stop-opacity="0.1"/>
+      <stop offset="100%" stop-color="#F59E0B" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Soft Glow Filter -->
+    <filter id="bnkrGlow" x="-25%" y="-25%" width="150%" height="150%">
+      <feGaussianBlur stdDeviation="2.4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <style>
+      .bezel-orbit {
+        transform-origin: 120px 120px;
+        animation: spinCW 48s linear infinite;
+      }
+      .astrolabe-outer {
+        transform-origin: 120px 120px;
+        animation: spinCCW 32s linear infinite;
+      }
+      .astrolabe-inner {
+        transform-origin: 120px 120px;
+        animation: spinCW 22s linear infinite;
+      }
+      .meridian-pulse {
+        stroke-dasharray: 24 68;
+        animation: orbitTrace 4s linear infinite;
+      }
+      .core-star {
+        transform-origin: 120px 120px;
+        animation: starBreathe 3.2s ease-in-out infinite;
+      }
+
+      @keyframes spinCW {
+        to { transform: rotate(360deg); }
+      }
+      @keyframes spinCCW {
+        to { transform: rotate(-360deg); }
+      }
+      @keyframes orbitTrace {
+        to { stroke-dashoffset: -92; }
+      }
+      @keyframes starBreathe {
+        0%, 100% { transform: scale(1); opacity: 0.94; }
+        50% { transform: scale(1.13); opacity: 1; }
+      }
+    </style>
+  </defs>
+
+  <!-- Subtle Ambient Gold Core Aura (Transparent Outside) -->
+  <circle cx="120" cy="120" r="88" fill="url(#bnkrCoreGlow)"/>
+
+  <!-- Outer Sovereign Gold Coin Rings -->
+  <circle cx="120" cy="120" r="112" fill="none" stroke="url(#bnkrGold)" stroke-width="3.5"/>
+  <circle cx="120" cy="120" r="103" fill="none" stroke="url(#bnkrGold)" stroke-width="4.5" stroke-dasharray="6 4" class="bezel-orbit"/>
+  <circle cx="120" cy="120" r="95" fill="none" stroke="url(#bnkrGold)" stroke-width="2"/>
+
+  <!-- Outer Astronomical Astrolabe Ring (Counter-Clockwise Clockwork) -->
+  <g class="astrolabe-outer">
+    <!-- Degree Graduations -->
+    <circle cx="120" cy="120" r="81" fill="none" stroke="url(#bnkrGold)" stroke-width="3" stroke-dasharray="1.5 5.5"/>
+    <circle cx="120" cy="120" r="74" fill="none" stroke="url(#bnkrBronze)" stroke-width="1.8"/>
+    <!-- Eccentric Ecliptic Ring (Offset Off-Center Like a Real Astrolabe Rete) -->
+    <circle cx="120" cy="112" r="56" fill="none" stroke="url(#bnkrGold)" stroke-width="2.2"/>
+    <!-- Celestial Star Pointers on the Rete -->
+    <circle cx="120" cy="56" r="3" fill="#FDE047"/>
+    <circle cx="174" cy="120" r="2.6" fill="#F59E0B"/>
+    <circle cx="66" cy="120" r="2.6" fill="#F59E0B"/>
+    <circle cx="120" cy="168" r="2.6" fill="#F59E0B"/>
+  </g>
+
+  <!-- Inner Clockwork Escapement & Meridian Ring (Clockwise) -->
+  <g class="astrolabe-inner">
+    <circle cx="120" cy="120" r="52" fill="none" stroke="url(#bnkrGold)" stroke-width="3.5" stroke-dasharray="4 6"/>
+    <circle cx="120" cy="120" r="42" fill="none" stroke="url(#bnkrBronze)" stroke-width="1.6"/>
+    <!-- Cardinal & Ordinal Clockwork Spokes -->
+    <g stroke="url(#bnkrGold)" stroke-width="1.8" stroke-linecap="round">
+      <line x1="120" y1="68" x2="120" y2="86"/>
+      <line x1="120" y1="154" x2="120" y2="172"/>
+      <line x1="68" y1="120" x2="86" y2="120"/>
+      <line x1="154" y1="120" x2="172" y2="120"/>
+      <line x1="83" y1="83" x2="96" y2="96"/>
+      <line x1="144" y1="144" x2="157" y2="157"/>
+      <line x1="157" y1="83" x2="144" y2="96"/>
+      <line x1="96" y1="144" x2="83" y2="157"/>
+    </g>
+  </g>
+
+  <!-- Sweeping Cryptographic Time Pulse Along the Meridian -->
+  <circle cx="120" cy="120" r="64" fill="none" stroke="#FDE047" stroke-width="2" stroke-linecap="round" class="meridian-pulse" filter="url(#bnkrGlow)"/>
+
+  <!-- Central 8-Point North Star Compass Rose -->
+  <g class="core-star" filter="url(#bnkrGlow)">
+    <!-- Secondary Diagonal Points -->
+    <polygon points="120,96 125,115 144,120 125,125 120,144 115,125 96,120 115,115" fill="url(#bnkrBronze)" transform="rotate(45 120 120)"/>
+    <!-- Primary Cardinal Points -->
+    <polygon points="120,88 126,114 152,120 126,126 120,152 114,126 88,120 114,114" fill="url(#bnkrGold)"/>
+    <!-- Inner Sovereign Pivot Jewel -->
+    <circle cx="120" cy="120" r="5" fill="#090D16" stroke="#FDE047" stroke-width="2"/>
+  </g>
+</svg>

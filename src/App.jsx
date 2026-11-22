@@ -540,7 +540,10 @@ export default function App() {
       <div className="mx-auto max-w-[1440px] px-5 py-5 sm:px-8 lg:px-12">
         <div className="flex flex-wrap items-center justify-between gap-5">
           <div className="flex items-center gap-4">
-            <CoinEmblem />
+            <div className="flex items-center gap-2">
+              <CoinEmblem />
+              <img src="/banneker-emblem.svg" alt="Banneker Coin astrolabe emblem" className="h-9 w-9 shrink-0" draggable="false" />
+            </div>
             <div><p className="font-display text-xl font-semibold tracking-[.09em] text-[#eee8d8]">THE BANNEKER COIN</p><p className="mt-0.5 text-[9px] uppercase tracking-[.25em] text-[#77756e]">An open monetary protocol <span className="px-1 text-gold">·</span> BNKR</p></div>
           </div>
           <div className="header-actions flex items-center gap-3">
