@@ -614,7 +614,13 @@ function medianTimePast(blocks) {
   return timestamps[Math.floor(timestamps.length / 2)];
 }
 
-function validateBlock(block, previousBlocks, state, consensus = normalizeConsensus()) {
+function validateBlock(block, previousBlocks, state, consensus = normalizeConsensus(), {
+  // A full replay judges permanent history that was already accepted when it
+  // arrived. Its timestamps are bound by the block hash and median-time-past,
+  // so a local clock that lags the mining fleet must not turn valid history
+  // into "Chain Invalid". Fresh submissions keep the wall-clock bound.
+  enforceWallClock = true
+} = {}) {
   if (!block || typeof block !== 'object' || Array.isArray(block)) {
     throw new Error('Block must be an object.');
   }
@@ -639,8 +645,9 @@ function validateBlock(block, previousBlocks, state, consensus = normalizeConsen
     preimage = canonicalBlockPreimage(block);
   }
 
+  const futureBound = enforceWallClock ? Date.now() + 120_000 : Number.MAX_SAFE_INTEGER;
   if (!Number.isSafeInteger(block.timestamp) || block.timestamp <= medianTimePast(previousBlocks) ||
-    block.timestamp > Date.now() + 120_000) {
+    block.timestamp > futureBound) {
     throw new Error('Block timestamp must exceed median time past and cannot be far in the future.');
   }
   if (!Number.isSafeInteger(block.nonce) || block.nonce < 0) throw new Error('Block nonce is invalid.');
@@ -684,7 +691,8 @@ function validateBlock(block, previousBlocks, state, consensus = normalizeConsen
   return txState;
 }
 
-function validateChainInternal(blocks, consensus = normalizeConsensus()) {
+function validateChainInternal(blocks, consensus = normalizeConsensus(), options = {}) {
+  const blockOptions = { enforceWallClock: options.enforceWallClock ?? false };
   try {
     if (!Array.isArray(blocks) || blocks.length === 0) throw new Error('Chain is empty.');
     const genesis = genesisBlock();
@@ -700,7 +708,7 @@ function validateChainInternal(blocks, consensus = normalizeConsensus()) {
     let chainWork = 0n;
     for (let i = 1; i < blocks.length; i += 1) {
       const current = blocks[i];
-      const nextState = validateBlock(current, history.slice(-MEDIAN_TIME_WINDOW), state, consensus);
+      const nextState = validateBlock(current, history.slice(-MEDIAN_TIME_WINDOW), state, consensus, blockOptions);
       chainWork += workForDifficulty(current.difficulty);
       if (current.chainWork !== undefined && current.chainWork !== chainWork.toString()) {
         throw new Error(`Block ${current.height} has incorrect chainWork.`);
@@ -737,8 +745,33 @@ function validateChainInternal(blocks, consensus = normalizeConsensus()) {
 
 export function validateChain(blocks, options = {}) {
   const { balances: _balances, nonces: _nonces, coinbase: _coinbase, ...result } =
-    validateChainInternal(blocks, normalizeConsensus(options));
+    validateChainInternal(blocks, normalizeConsensus(options), {
+      // The exported helper validates untrusted input, so it stays strict.
+      enforceWallClock: options.enforceWallClock ?? true
+    });
   return result;
+}
+
+/**
+ * Newest-first page extraction over an immutable chain array. Unsorted requests
+ * touch only `offset + limit` entries; searched requests still need one pass to
+ * compute `total`, but never allocate a full-size reversed copy.
+ */
+export function pageBlocksDescending(blocks, { limit = 50, offset = 0, search = '' } = {}) {
+  const query = String(search).trim().toLowerCase();
+  const page = [];
+  let total = 0;
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    if (query && !String(block.height).includes(query) &&
+      !String(block.miner || '').toLowerCase().includes(query) &&
+      !String(block.hash || '').toLowerCase().includes(query)) {
+      continue;
+    }
+    if (total >= offset && page.length < limit) page.push({ ...block });
+    total += 1;
+  }
+  return { blocks: page, total };
 }
 
 // Startup against Turso can fail while a hibernating database wakes up. Those
@@ -1006,6 +1039,11 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
   // validation (validateStoredChain) still reads storage directly and remains
   // the fail-closed tamper check.
   let chainSnapshot = null;
+  // A generation counter identifies each immutable snapshot. The deep-verdict
+  // cache below is keyed by it, so a block, account, or chain replacement
+  // invalidates the cached verdict immediately and no poll can serve a stale
+  // result after a state change.
+  let snapshotGeneration = 0;
 
   function requireSnapshot() {
     if (!chainSnapshot) throw new Error('Validated chain snapshot is unavailable.');
@@ -1014,6 +1052,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
 
   function setChainSnapshot(snapshot) {
     chainSnapshot = snapshot;
+    snapshotGeneration += 1;
   }
 
   // Rebuild the snapshot from storage after an ambiguous write. A remote
@@ -1335,6 +1374,27 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       ...checkpoint,
       healthy
     };
+  }
+
+  // A deep storage cross-check re-reads and replays every block. Serving it on
+  // every UI poll is O(chain length) per tab and blocks the event loop, which
+  // can starve /health and produce 503s on a 5,000+ block chain. The verdict is
+  // cached per snapshot generation with a short wall-clock bound so out-of-band
+  // storage tampering is still detected within one minute. `force` is available
+  // to operators for an immediate, uncached check.
+  const DEEP_VALIDATION_TTL_MS = 60_000;
+  let deepValidationCache = null;
+
+  async function cachedDeepValidation({ force = false } = {}) {
+    const snapshot = requireSnapshot();
+    const key = `${snapshotGeneration}:${snapshot.height}:${snapshot.tip.hash}:${snapshot.chainWork}`;
+    const cached = deepValidationCache;
+    if (!force && cached && cached.key === key && Date.now() - cached.at < DEEP_VALIDATION_TTL_MS) {
+      return cached.result;
+    }
+    const result = await validateStoredChain();
+    deepValidationCache = { key, at: Date.now(), result };
+    return result;
   }
 
   async function readAccountsFromSql() {
@@ -2014,8 +2074,9 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
   }
 
   async function replaceChainLocked(candidate) {
-    const validation = validateChainInternal(candidate, consensus);
-    if (!validation.valid) throw new Error(`Peer chain rejected: ${validation.error}`);
+    if (!Array.isArray(candidate) || candidate.length === 0) {
+      throw new Error('Peer chain rejected: candidate is empty.');
+    }
 
     // Rule N-1 / §8.8: checkpoint conflict is fatal and is decided before any
     // cumulative-work comparison. A chain claiming 10^30 work still loses here.
@@ -2025,12 +2086,28 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       activationHeight: consensus.v2ActivationHeight
     });
 
+    // Cheap prefilter before the expensive replay. The tip's claimed work is
+    // not trusted for acceptance — the full replay below recomputes it — but
+    // it is enough to reject an equal/weaker chain without re-validating all
+    // 5,000+ blocks on every 30-second peer poll.
     const local = await getBlocks();
     const oldChainWork = BigInt(local[local.length - 1].chainWork || '0');
+    // A malformed claimed value must not throw here; fall through to the full
+    // replay, which rejects it with a proper peer-chain error.
+    let claimedWork = null;
+    try { claimedWork = BigInt(candidate[candidate.length - 1].chainWork || '0'); } catch { /* full replay decides */ }
+    if (claimedWork !== null && claimedWork <= oldChainWork) {
+      return { replaced: false, reason: 'NO_WORK_INCREASE', oldChainWork: oldChainWork.toString(), chainWork: claimedWork.toString() };
+    }
+
+    // A peer-supplied chain is untrusted input, so keep the wall-clock bound
+    // here even though replay of already-stored history is clock-independent.
+    const validation = validateChainInternal(candidate, consensus, { enforceWallClock: true });
+    if (!validation.valid) throw new Error(`Peer chain rejected: ${validation.error}`);
     const newChainWork = BigInt(validation.chainWork);
 
     if (newChainWork <= oldChainWork) {
-      return { replaced: false, oldChainWork: oldChainWork.toString(), chainWork: newChainWork.toString() };
+      return { replaced: false, reason: 'NO_WORK_INCREASE', oldChainWork: oldChainWork.toString(), chainWork: newChainWork.toString() };
     }
 
     let commonAncestor = 0;
@@ -2152,19 +2229,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
   }
 
   async function listBlocks({ limit = 50, offset = 0, search = '' } = {}) {
-    // SQLite LIKE is case-insensitive for ASCII, so the in-memory filter folds
-    // case as well. Ordering and paging semantics match the former SQL query.
-    const query = String(search).trim().toLowerCase();
-    const matched = requireSnapshot().blocks.filter(block =>
-      !query ||
-      String(block.height).includes(query) ||
-      String(block.miner || '').toLowerCase().includes(query) ||
-      String(block.hash || '').toLowerCase().includes(query)
-    );
-    return {
-      blocks: matched.slice().reverse().slice(offset, offset + limit).map(block => ({ ...block })),
-      total: matched.length
-    };
+    return pageBlocksDescending(requireSnapshot().blocks, { limit, offset, search });
   }
 
   async function refreshCachedPeers() {
@@ -2358,6 +2423,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     acceptBlock,
     acceptTransaction,
     addPeer,
+    cachedDeepValidation,
     cachedNetworkState,
     cachedValidation,
     close,

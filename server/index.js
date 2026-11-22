@@ -291,7 +291,7 @@ const transactionLimiter = createRateLimiter({
 app.use('/api/tx', transactionLimiter);
 app.use('/api/peer/tx', transactionLimiter);
 const readLimiter = createRateLimiter({ limit: PROTECTION_STATUS.readLimitPerMinute });
-app.use(['/api/state', '/api/blocks', '/api/validate', '/api/peer/chain', '/api/peer/blocks', '/health'], readLimiter);
+app.use(['/api/state', '/api/stats', '/api/blocks', '/api/validate', '/api/peer/chain', '/api/peer/blocks', '/health'], readLimiter);
 
 app.use((req, res, next) => {
   const origin = req.get('origin');
@@ -830,8 +830,35 @@ app.get('/api/mempool', asyncRoute(async (_req, res) => {
   res.json({ transactions: await ledger.getMempool() });
 }));
 
-app.get('/api/validate', asyncRoute(async (_req, res) => {
-  res.json({ ...await ledger.validateStoredChain(), protections: PROTECTION_STATUS });
+app.get('/api/validate', asyncRoute(async (req, res) => {
+  // The default verdict is cached per snapshot generation (60s TTL) so the
+  // browser's periodic integrity poll cannot replay a 5,000+ block chain on
+  // every request. `?full=1` forces an uncached storage deep-check.
+  const full = String(req.query.full || '') === '1';
+  const result = await ledger.cachedDeepValidation({ force: full });
+  res.set('Cache-Control', 'no-store');
+  res.json({ ...result, protections: PROTECTION_STATUS });
+}));
+
+app.get('/api/stats', asyncRoute(async (_req, res) => {
+  // Compact, snapshot-backed summary. No block rows are read or serialized.
+  const state = await ledger.cachedNetworkState();
+  const identity = ledger.getChainIdentity();
+  res.json({
+    height: state.height,
+    supply: state.supply,
+    chainWork: state.chainWork,
+    difficulty: state.difficulty,
+    reward: state.reward,
+    pendingCount: state.pendingCount,
+    tipHash: state.latestBlock?.hash ?? identity.genesisHash,
+    protocolVersion: identity.protocolVersion,
+    networkId: identity.networkId,
+    checkpointState: state.checkpointState,
+    accountsValid: state.accountsValid,
+    healthy: state.healthy,
+    peers: (await ledger.getPeers()).length
+  });
 }));
 
 app.get('/api/mining/template', asyncRoute(async (req, res) => {
@@ -904,9 +931,23 @@ app.post('/api/peers', asyncRoute(async (req, res) => {
   void synchronizePeers();
 }));
 
-app.get('/api/peer/chain', asyncRoute(async (_req, res) => {
+app.get('/api/peer/chain', asyncRoute(async (req, res) => {
+  // Bounded compatibility surface. Paged sync uses /api/peer/blocks; this route
+  // must never serialize the entire chain. With no cursor it returns the newest
+  // page only and reports `truncated` so callers can page backwards.
   const state = await ledger.cachedNetworkState();
-  res.json({ chain: await ledger.getBlocks(), chainWork: state.chainWork });
+  const requestedFrom = parsePageHeight(req.query.from, 'from');
+  const from = requestedFrom ?? Math.max(0, state.height - MAX_PAGE_BLOCKS + 1);
+  const limit = Math.min(MAX_PAGE_BLOCKS, Math.max(1, Number.parseInt(req.query.limit, 10) || MAX_PAGE_BLOCKS));
+  const chain = await ledger.getBlockRange(from, from + limit - 1, { limit });
+  res.set('Cache-Control', 'no-store');
+  res.json({
+    chain,
+    chainWork: state.chainWork,
+    height: state.height,
+    from,
+    truncated: from > 0 || from + chain.length <= state.height
+  });
 }));
 
 /**

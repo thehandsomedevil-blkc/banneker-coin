@@ -284,7 +284,10 @@ export default function App() {
         }
         return;
       }
-      setVerified(false);
+      // A failed or timed-out check is not evidence that the chain is invalid.
+      // Leave the badge in its "Checking…" state instead of showing a false
+      // "Chain Invalid" verdict on transient 503/429/network failures.
+      setVerified(null);
       if (!silent) notify(error.message, 'error');
     }
   }, [wallet, notify]);
