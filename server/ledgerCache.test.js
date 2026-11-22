@@ -200,6 +200,35 @@ test('peer list mutations refresh the cached peer view', async () => {
   }
 });
 
+test('a failed post-commit mempool count read does not strand the snapshot at the old tip', async () => {
+  const ledger = await createLedger(':memory:');
+  const address = base64(nacl.sign.keyPair().publicKey);
+  const originalExecute = ledger.client.execute.bind(ledger.client);
+  let failMempoolCount = false;
+  ledger.client.execute = (...args) => {
+    const sql = typeof args[0] === 'string' ? args[0] : args[0]?.sql;
+    if (failMempoolCount && /SELECT COUNT\(\*\) AS count FROM mempool/.test(sql)) {
+      throw new Error('simulated post-commit read failure');
+    }
+    return originalExecute(...args);
+  };
+  try {
+    await mineHeight(ledger, address, 1);
+    failMempoolCount = true;
+    const accepted = await mineHeight(ledger, address, 2);
+    assert.equal(accepted.height, 2);
+
+    // The block was committed and the snapshot must have advanced anyway.
+    const state = await ledger.cachedNetworkState(address);
+    assert.equal(state.height, 2);
+    assert.equal((await ledger.getBlocks()).length, 3);
+    assert.equal((await ledger.miningTemplate(address)).height, 3);
+    assert.equal((await ledger.validateStoredChain()).height, 2);
+  } finally {
+    ledger.close();
+  }
+});
+
 test('deep validation still reads storage and detects out-of-band tampering', async () => {
   const ledger = await createLedger(':memory:');
   const address = base64(nacl.sign.keyPair().publicKey);

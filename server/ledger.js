@@ -1956,8 +1956,16 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     await withTransaction(transaction => applyBlock(storedBlock, txState.transactions, transaction));
 
     // Swap in a fresh snapshot generation. `txState` is the fully validated
-    // post-block state, so no chain/account re-read is needed -- only the small
-    // mempool count is refreshed after applyBlock removed mined transactions.
+    // post-block state, so no chain/account re-read is needed. The mempool count
+    // is best-effort: if this small read fails after the block was committed,
+    // fall back to the prior count minus the transactions just mined. A failed
+    // post-commit read must never leave the snapshot behind the stored chain.
+    let pendingCount;
+    try {
+      pendingCount = await getMempoolCountFromSql();
+    } catch {
+      pendingCount = Math.max(0, requireSnapshot().pendingCount - block.transactions.length);
+    }
     const nextBlocks = [...blocks, storedBlock];
     setChainSnapshot(buildChainSnapshot({
       blocks: nextBlocks,
@@ -1965,7 +1973,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       validation: { ...txState, valid: true },
       checkpoint: checkpointStatus(nextBlocks),
       peers: requireSnapshot().peers,
-      pendingCount: await getMempoolCountFromSql()
+      pendingCount
     }));
 
     return { block: storedBlock, height: storedBlock.height, supply: txState.supply, chainWork };
@@ -2085,13 +2093,17 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       snapshotWork += workForDifficulty(block.difficulty);
       return { ...block, hash: block.hash ?? hashBlock(block), chainWork: snapshotWork.toString() };
     });
+    // The transaction deleted every mempool row and reinserted exactly
+    // `requeued`, so its length is the authoritative post-commit count. Using
+    // it avoids a post-commit SQL read that could otherwise strand the snapshot
+    // at the old tip after the replacement was already written.
     setChainSnapshot(buildChainSnapshot({
       blocks: nextBlocks,
       accounts: accountsFromValidation(validation.balances, validation.nonces),
       validation,
       checkpoint: checkpointStatus(nextBlocks),
       peers: requireSnapshot().peers,
-      pendingCount: await getMempoolCountFromSql()
+      pendingCount: requeued.length
     }));
 
     return {
@@ -2120,7 +2132,13 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
   }
 
   async function refreshCachedPeers() {
-    setChainSnapshot({ ...requireSnapshot(), peers: await getPeersFromSql() });
+    try {
+      setChainSnapshot({ ...requireSnapshot(), peers: await getPeersFromSql() });
+    } catch (error) {
+      // The peer row was already written; a failed refresh must not make the
+      // caller believe the mutation failed. The next mutation will retry it.
+      console.warn(`Peer cache refresh failed: ${error?.message || error}`);
+    }
   }
 
   async function addPeer(url) {
