@@ -229,6 +229,37 @@ test('a failed post-commit mempool count read does not strand the snapshot at th
   }
 });
 
+test('an ambiguous commit resyncs the snapshot from committed storage', async () => {
+  const ledger = await createLedger(':memory:');
+  const address = base64(nacl.sign.keyPair().publicKey);
+  const originalTransaction = ledger.client.transaction.bind(ledger.client);
+  let failCommit = false;
+  ledger.client.transaction = async (mode) => {
+    const transaction = await originalTransaction(mode);
+    const originalCommit = transaction.commit.bind(transaction);
+    transaction.commit = async () => {
+      await originalCommit();
+      if (failCommit) {
+        failCommit = false;
+        throw new Error('simulated ambiguous commit');
+      }
+    };
+    return transaction;
+  };
+  try {
+    await mineHeight(ledger, address, 1);
+    failCommit = true;
+    await assert.rejects(() => mineHeight(ledger, address, 2), /ambiguous commit/);
+
+    // The block was committed; the snapshot must have been resynced anyway.
+    assert.equal((await ledger.cachedNetworkState(address)).height, 2);
+    assert.equal((await ledger.miningTemplate(address)).height, 3);
+    assert.equal((await ledger.validateStoredChain()).height, 2);
+  } finally {
+    ledger.close();
+  }
+});
+
 test('deep validation still reads storage and detects out-of-band tampering', async () => {
   const ledger = await createLedger(':memory:');
   const address = base64(nacl.sign.keyPair().publicKey);

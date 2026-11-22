@@ -1016,6 +1016,28 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     chainSnapshot = snapshot;
   }
 
+  // Rebuild the snapshot from storage after an ambiguous write. A remote
+  // transaction can commit and still throw while acknowledging the commit; in
+  // that case the caller has no idea the chain moved, so the cache must be
+  // refreshed from the committed rows before the request finishes.
+  async function resyncSnapshotFromSql() {
+    const [blocks, accounts, peers, pendingCount] = await Promise.all([
+      getBlocksFromSql(),
+      readAccountsFromSql(),
+      getPeersFromSql(),
+      getMempoolCountFromSql()
+    ]);
+    const validation = validateChainInternal(blocks, consensus);
+    setChainSnapshot(buildChainSnapshot({
+      blocks,
+      accounts,
+      validation,
+      checkpoint: checkpointStatus(blocks),
+      peers,
+      pendingCount
+    }));
+  }
+
   function buildChainSnapshot({ blocks, accounts, validation, checkpoint, peers, pendingCount }) {
     const tip = blocks[blocks.length - 1];
     if (!tip) throw new Error('Cannot build a chain snapshot without a genesis block.');
@@ -1953,7 +1975,15 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
         activationHeight: consensus.v2ActivationHeight
       });
     }
-    await withTransaction(transaction => applyBlock(storedBlock, txState.transactions, transaction));
+    try {
+      await withTransaction(transaction => applyBlock(storedBlock, txState.transactions, transaction));
+    } catch (error) {
+      // If the remote commit landed but its acknowledgment failed, the block is
+      // already in storage. Resync before rethrowing so the next template uses
+      // the new tip instead of colliding with the committed row.
+      try { await resyncSnapshotFromSql(); } catch { /* keep original error */ }
+      throw error;
+    }
 
     // Swap in a fresh snapshot generation. `txState` is the fully validated
     // post-block state, so no chain/account re-read is needed. The mempool count
@@ -2060,29 +2090,35 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       requeued.push(tx);
     }
 
-    await withTransaction(async transaction => {
-      await transaction.execute("DELETE FROM blocks WHERE height > 0");
-      await transaction.execute("DELETE FROM accounts");
-      await transaction.execute("DELETE FROM mempool");
+    try {
+      await withTransaction(async transaction => {
+        await transaction.execute("DELETE FROM blocks WHERE height > 0");
+        await transaction.execute("DELETE FROM accounts");
+        await transaction.execute("DELETE FROM mempool");
 
-      let chainWork = 0n;
-      for (const block of candidate) {
-        if (block.height === 0) continue;
-        chainWork += workForDifficulty(block.difficulty);
-        await applyBlock({
-          ...block,
-          hash: block.hash ?? hashBlock(block),
-          chainWork: chainWork.toString()
-        }, null, transaction);
-      }
+        let chainWork = 0n;
+        for (const block of candidate) {
+          if (block.height === 0) continue;
+          chainWork += workForDifficulty(block.difficulty);
+          await applyBlock({
+            ...block,
+            hash: block.hash ?? hashBlock(block),
+            chainWork: chainWork.toString()
+          }, null, transaction);
+        }
 
-      for (const tx of requeued) {
-        await transaction.execute({
-          sql: "INSERT INTO mempool(sender, nonce, timestamp, json) VALUES (?, ?, ?, ?)",
-          args: [tx.sender, tx.nonce, tx.timestamp, JSON.stringify(tx)]
-        });
-      }
-    });
+        for (const tx of requeued) {
+          await transaction.execute({
+            sql: "INSERT INTO mempool(sender, nonce, timestamp, json) VALUES (?, ?, ?, ?)",
+            args: [tx.sender, tx.nonce, tx.timestamp, JSON.stringify(tx)]
+          });
+        }
+      });
+    } catch (error) {
+      // Same ambiguous-commit risk as block acceptance: resync before rethrowing.
+      try { await resyncSnapshotFromSql(); } catch { /* keep original error */ }
+      throw error;
+    }
 
     // A reorg changes the tip, account state, and recent difficulty history.
     // Mirror exactly what applyBlock wrote so the new snapshot generation is
