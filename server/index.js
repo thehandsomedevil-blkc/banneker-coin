@@ -742,7 +742,7 @@ async function synchronizePeers() {
 }
 
 app.get('/api/node', asyncRoute(async (_req, res) => {
-  const state = await ledger.networkState();
+  const state = await ledger.cachedNetworkState();
   const identity = ledger.getChainIdentity();
   const peers = await ledger.getPeers();
   res.json({
@@ -773,7 +773,10 @@ app.get('/api/node', asyncRoute(async (_req, res) => {
 app.get('/health', asyncRoute(async (_req, res) => {
   let health;
   try {
-    health = await ledger.validateStoredChain();
+    // Served from the validated in-memory generation so a slow or rate-limited
+    // database cannot make a healthy node look dead. /api/validate still runs
+    // the full storage cross-check and remains the deep tamper detector.
+    health = ledger.cachedValidation();
   } catch (error) {
     console.error(`Health check failed: ${error?.message || error}`);
     return res.status(503).json({ ok: false, reasonCode: 'STORAGE_UNREACHABLE' });
@@ -804,7 +807,7 @@ app.get('/health', asyncRoute(async (_req, res) => {
 
 app.get('/api/state', asyncRoute(async (req, res) => {
   const address = req.query.address ? String(req.query.address) : null;
-  const state = await ledger.networkState(address);
+  const state = await ledger.cachedNetworkState(address);
   const peers = await ledger.getPeers();
   res.json({
     ...state,
@@ -902,7 +905,7 @@ app.post('/api/peers', asyncRoute(async (req, res) => {
 }));
 
 app.get('/api/peer/chain', asyncRoute(async (_req, res) => {
-  const state = await ledger.networkState();
+  const state = await ledger.cachedNetworkState();
   res.json({ chain: await ledger.getBlocks(), chainWork: state.chainWork });
 }));
 
@@ -965,7 +968,7 @@ app.get('/api/peer/blocks', asyncRoute(async (req, res) => {
 
 app.post('/api/peers/sync', asyncRoute(async (_req, res) => {
   const results = await synchronizePeers();
-  const state = await ledger.networkState();
+  const state = await ledger.cachedNetworkState();
   res.json({ results, chainWork: state.chainWork });
 }));
 

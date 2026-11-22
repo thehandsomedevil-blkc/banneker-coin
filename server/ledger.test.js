@@ -884,7 +884,7 @@ test('mining templates exclude invalid, stale, and overdrawn mempool entries', a
   }
 });
 
-test('mining template reads cached state, updates on acceptance, and invalidates on reorg', async () => {
+test('mining template reads cached state, updates on acceptance, and refreshes on reorg', async () => {
   const local = await createLedger(':memory:');
   const peer = await createLedger(':memory:');
   const miner = nacl.sign.keyPair();
@@ -928,7 +928,7 @@ test('mining template reads cached state, updates on acceptance, and invalidates
     assert.equal(third.height, 2);
     assert.equal(third.prevHash, accepted.block.hash);
 
-    // A higher-work replacement must invalidate the cached snapshot.
+    // A higher-work replacement swaps in a fresh snapshot generation atomically.
     await mineBranch(peer, peerMiner, 15_000, null, 2);
     const peerChain = await peer.getBlocks();
     const peerTip = peerChain[peerChain.length - 1];
@@ -937,12 +937,12 @@ test('mining template reads cached state, updates on acceptance, and invalidates
 
     resetReads();
     const afterReorg = await local.miningTemplate(peerAddress);
-    assert.ok(blockScans >= 1, 'chain replacement must invalidate the cached chain snapshot');
-    assert.ok(accountReads >= 1, 'chain replacement must invalidate the cached account snapshot');
+    assert.equal(blockScans, 0, 'chain replacement updates the cached chain snapshot without a re-scan');
+    assert.equal(accountReads, 0, 'chain replacement updates the cached account snapshot without a re-read');
     assert.equal(afterReorg.prevHash, peerTip.hash);
     assert.equal(afterReorg.height, peerTip.height + 1);
 
-    // The rebuilt snapshot is cached again for subsequent templates.
+    // The updated snapshot stays cached for subsequent templates.
     resetReads();
     await local.miningTemplate(peerAddress);
     assert.equal(blockScans, 0);

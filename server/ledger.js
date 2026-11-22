@@ -999,6 +999,60 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     }
   }
 
+  // A single immutable generation of validated chain state. Startup builds it
+  // from the already-verified chain; every mutation swaps in a fresh generation
+  // atomically. Request handlers read only this object, so a slow, rate-limited,
+  // or temporarily unreadable Turso endpoint cannot stall normal reads. Deep
+  // validation (validateStoredChain) still reads storage directly and remains
+  // the fail-closed tamper check.
+  let chainSnapshot = null;
+
+  function requireSnapshot() {
+    if (!chainSnapshot) throw new Error('Validated chain snapshot is unavailable.');
+    return chainSnapshot;
+  }
+
+  function setChainSnapshot(snapshot) {
+    chainSnapshot = snapshot;
+  }
+
+  function buildChainSnapshot({ blocks, accounts, validation, checkpoint, peers, pendingCount }) {
+    const tip = blocks[blocks.length - 1];
+    if (!tip) throw new Error('Cannot build a chain snapshot without a genesis block.');
+    const supply = sumBalances(accounts);
+    const minedCounts = new Map();
+    for (const block of blocks) {
+      if (typeof block.miner === 'string') {
+        minedCounts.set(block.miner, (minedCounts.get(block.miner) || 0) + 1);
+      }
+    }
+    const accountErrors = compareAccounts(accounts, validation);
+    const accountsValid = accountErrors.length === 0;
+    const checkpointState = checkpoint.checkpointState;
+    const healthy = validation.valid && accountsValid &&
+      checkpointState !== 'VIOLATED' &&
+      checkpointState !== 'UNSUPPORTED_PROTOCOL_VERSION';
+    return {
+      blocks,
+      accounts: new Map(accounts),
+      tip,
+      height: tip.height,
+      chainWork: tip.chainWork,
+      supply,
+      validation,
+      checkpoint,
+      checkpointState,
+      checkpointErrors: checkpoint.checkpointErrors,
+      checkpoints: checkpoint.checkpoints,
+      accountErrors,
+      accountsValid,
+      healthy,
+      minedCounts,
+      peers: [...peers],
+      pendingCount
+    };
+  }
+
   async function initializeSchema() {
     await client.batch([
       `CREATE TABLE IF NOT EXISTS blocks (
@@ -1093,14 +1147,16 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     throw error;
   }
 
+  // Raw storage readers. These are used only by startup, deep validation, and
+  // bounded peer exchange -- never by request handlers once the snapshot exists.
   async function getBlockRows() {
     // Capture the tip first so OFFSET paging sees a consistent upper bound even
     // if a peer sync extends the chain while a full replay is in progress.
-    const tipHeight = await getTipHeight();
+    const tipHeight = await getTipHeightFromSql();
     return fetchPagedBlockRows(client, { maxHeight: tipHeight });
   }
 
-  async function getBlocks() {
+  async function getBlocksFromSql() {
     const rows = await getBlockRows();
     return rows.map(row => JSON.parse(row.json));
   }
@@ -1128,7 +1184,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     return result.rows.map(row => JSON.parse(row.json));
   }
 
-  async function getTipHeight() {
+  async function getTipHeightFromSql() {
     const result = await client.execute("SELECT MAX(height) AS height FROM blocks");
     const height = Number(result.rows[0]?.height ?? 0);
     return Number.isSafeInteger(height) && height >= 0 ? height : 0;
@@ -1240,7 +1296,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       accountErrors = compareAccounts(new Map(), validation);
     } else {
       try {
-        accountErrors = compareAccounts(await readAccounts(), validation);
+        accountErrors = compareAccounts(await readAccountsFromSql(), validation);
       } catch (error) {
         accountErrors = [{ code: 'ACCOUNT_STATE_INVALID', message: error.message }];
       }
@@ -1259,7 +1315,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     };
   }
 
-  async function readAccounts() {
+  async function readAccountsFromSql() {
     const result = await client.execute("SELECT address, balance_units, nonce FROM accounts");
     const accounts = new Map();
     for (const row of result.rows) {
@@ -1395,13 +1451,6 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     }
   }
 
-  // Read-only mining templates are built from an in-memory snapshot of the
-  // validated chain tip/accounts. It is seeded once after startup validation and
-  // kept in sync by every chain mutation path. This exists only to avoid
-  // re-fetching thousands of historical rows over HTTP on each template build;
-  // block/transaction/checkpoint/supply validation still runs in full on writes.
-  let templateStateCache = null;
-
   function accountsFromValidation(balances, nonces) {
     const accounts = new Map();
     for (const [address, balanceUnits] of balances) {
@@ -1410,20 +1459,74 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     return accounts;
   }
 
-  function setTemplateStateCache(blocks, accounts) {
-    templateStateCache = { blocks, accounts };
-  }
-
-  function invalidateTemplateStateCache() {
-    templateStateCache = null;
-  }
-
   async function loadTemplateState() {
-    if (!templateStateCache) {
-      const [blocks, accounts] = await Promise.all([getBlocks(), readAccounts()]);
-      setTemplateStateCache(blocks, accounts);
+    const snapshot = requireSnapshot();
+    return { blocks: snapshot.blocks, accounts: snapshot.accounts };
+  }
+
+  // Request-path readers resolve entirely from the validated snapshot. Raw SQL
+  // readers above are reserved for startup, deep validation, and peer exchange.
+  async function getBlocks() {
+    return [...requireSnapshot().blocks];
+  }
+
+  async function getTipHeight() {
+    return requireSnapshot().height;
+  }
+
+  async function readAccounts() {
+    return new Map(requireSnapshot().accounts);
+  }
+
+  async function getPeers() {
+    return [...requireSnapshot().peers];
+  }
+
+  async function getAccount(address) {
+    const account = requireSnapshot().accounts.get(address);
+    const balance = account?.balance_units ?? 0;
+    const nonce = account?.nonce ?? 0;
+    if (!Number.isSafeInteger(balance) || balance < 0 || balance > MAX_SUPPLY ||
+      !Number.isSafeInteger(nonce) || nonce < 0) {
+      throw new Error('Cached account values are outside the safe integer range.');
     }
-    return templateStateCache;
+    return { balance_units: balance, nonce };
+  }
+
+  async function getSupply() {
+    return requireSnapshot().supply;
+  }
+
+  async function getPeersFromSql() {
+    const result = await client.execute("SELECT url, last_seen AS lastSeen, last_error AS lastError FROM peers ORDER BY url");
+    return result.rows.map(row => ({ url: row.url, lastSeen: Number(row.lastSeen), lastError: row.lastError }));
+  }
+
+  async function getMempoolCountFromSql() {
+    const result = await client.execute("SELECT COUNT(*) AS count FROM mempool");
+    return Number(result.rows[0]?.count ?? 0);
+  }
+
+  async function getAccountFromSql(address) {
+    const result = await client.execute({
+      sql: "SELECT balance_units, nonce FROM accounts WHERE address = ?",
+      args: [address]
+    });
+    const account = result.rows[0] || { balance_units: 0, nonce: 0 };
+    if (!Number.isSafeInteger(Number(account.balance_units)) || account.balance_units < 0 ||
+      account.balance_units > MAX_SUPPLY || !Number.isSafeInteger(Number(account.nonce)) || account.nonce < 0) {
+      throw new Error('Stored account values are outside the safe integer range.');
+    }
+    return { balance_units: Number(account.balance_units), nonce: Number(account.nonce) };
+  }
+
+  async function getSupplyFromSql() {
+    const result = await client.execute("SELECT COALESCE(SUM(balance_units), 0) AS total FROM accounts");
+    const total = Number(result.rows[0].total);
+    if (!Number.isSafeInteger(total) || total < 0 || total > MAX_SUPPLY) {
+      throw new Error('Stored account supply exceeds the safe integer or monetary policy limit.');
+    }
+    return total;
   }
 
   // Startup validation and migration with safe recovery: if the stored tip is
@@ -1432,7 +1535,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
   // at most log2(n) validation passes instead of one per block (the old O(n²)
   // path). Account reconstruction is checked against a full replay and repaired
   // atomically. Never wipe to genesis.
-  let storedBlocks = await getBlocks();
+  let storedBlocks = await getBlocksFromSql();
   enforceStartupCheckpoints(storedBlocks);
   let startupValidation = validateChainInternal(storedBlocks, consensus);
   let recovery = null;
@@ -1466,7 +1569,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     }
   }
 
-  const startupAccounts = await readAccounts();
+  const startupAccounts = await readAccountsFromSql();
   const accountsNeedRebuild = recovery || !accountsMatchValidation(startupAccounts, startupValidation);
   if (accountsNeedRebuild) {
     await withTransaction(async transaction => {
@@ -1519,39 +1622,22 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     cachedBlocks = migratedBlocks;
   }
 
-  // Seed the template snapshot from already-validated startup state rather than
-  // scanning the chain a second time.
-  setTemplateStateCache(
-    cachedBlocks,
-    accountsNeedRebuild
+  // Install the initial validated snapshot from state that was already read and
+  // verified above. This is the only full chain/account scan at startup; every
+  // later read resolves from this object.
+  setChainSnapshot(buildChainSnapshot({
+    blocks: cachedBlocks,
+    accounts: accountsNeedRebuild
       ? accountsFromValidation(startupValidation.balances, startupValidation.nonces)
-      : startupAccounts
-  );
+      : startupAccounts,
+    validation: startupValidation,
+    checkpoint: checkpointStatus(cachedBlocks),
+    peers: await getPeersFromSql(),
+    pendingCount: await getMempoolCountFromSql()
+  }));
 
   // Checkpoints were already verified against the stored chain above, before
   // rollback and account rebuild. No later startup step may weaken that verdict.
-
-  async function getAccount(address) {
-    const result = await client.execute({
-      sql: "SELECT balance_units, nonce FROM accounts WHERE address = ?",
-      args: [address]
-    });
-    const account = result.rows[0] || { balance_units: 0, nonce: 0 };
-    if (!Number.isSafeInteger(Number(account.balance_units)) || account.balance_units < 0 ||
-      account.balance_units > MAX_SUPPLY || !Number.isSafeInteger(Number(account.nonce)) || account.nonce < 0) {
-      throw new Error('Stored account values are outside the safe integer range.');
-    }
-    return { balance_units: Number(account.balance_units), nonce: Number(account.nonce) };
-  }
-
-  async function getSupply() {
-    const result = await client.execute("SELECT COALESCE(SUM(balance_units), 0) AS total FROM accounts");
-    const total = Number(result.rows[0].total);
-    if (!Number.isSafeInteger(total) || total < 0 || total > MAX_SUPPLY) {
-      throw new Error('Stored account supply exceeds the safe integer or monetary policy limit.');
-    }
-    return total;
-  }
 
   async function pendingFor(address) {
     const result = await client.execute({
@@ -1706,6 +1792,12 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       }
       throw error;
     }
+    // The mempool count is part of the request-path snapshot; keep it in step
+    // with the row just admitted without touching chain or account storage.
+    setChainSnapshot({
+      ...requireSnapshot(),
+      pendingCount: Number(mempoolCount.rows[0].count) + 1
+    });
     return tx;
   }
 
@@ -1863,10 +1955,18 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     }
     await withTransaction(transaction => applyBlock(storedBlock, txState.transactions, transaction));
 
-    // Keep the template snapshot current with the block that was just written.
-    // `blocks` and `accounts` were loaded fresh above, and `txState` is the
-    // fully validated post-block state, so no additional reads are needed.
-    setTemplateStateCache([...blocks, storedBlock], accountsFromValidation(txState.balances, txState.nonces));
+    // Swap in a fresh snapshot generation. `txState` is the fully validated
+    // post-block state, so no chain/account re-read is needed -- only the small
+    // mempool count is refreshed after applyBlock removed mined transactions.
+    const nextBlocks = [...blocks, storedBlock];
+    setChainSnapshot(buildChainSnapshot({
+      blocks: nextBlocks,
+      accounts: accountsFromValidation(txState.balances, txState.nonces),
+      validation: { ...txState, valid: true },
+      checkpoint: checkpointStatus(nextBlocks),
+      peers: requireSnapshot().peers,
+      pendingCount: await getMempoolCountFromSql()
+    }));
 
     return { block: storedBlock, height: storedBlock.height, supply: txState.supply, chainWork };
   }
@@ -1977,8 +2077,22 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     });
 
     // A reorg changes the tip, account state, and recent difficulty history.
-    // Drop the cached snapshot so the next template rebuilds from the new chain.
-    invalidateTemplateStateCache();
+    // Mirror exactly what applyBlock wrote so the new snapshot generation is
+    // valid immediately, without a second full chain/account scan.
+    let snapshotWork = 0n;
+    const nextBlocks = candidate.map(block => {
+      if (block.height === 0) return block;
+      snapshotWork += workForDifficulty(block.difficulty);
+      return { ...block, hash: block.hash ?? hashBlock(block), chainWork: snapshotWork.toString() };
+    });
+    setChainSnapshot(buildChainSnapshot({
+      blocks: nextBlocks,
+      accounts: accountsFromValidation(validation.balances, validation.nonces),
+      validation,
+      checkpoint: checkpointStatus(nextBlocks),
+      peers: requireSnapshot().peers,
+      pendingCount: await getMempoolCountFromSql()
+    }));
 
     return {
       replaced: true,
@@ -1990,28 +2104,23 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
   }
 
   async function listBlocks({ limit = 50, offset = 0, search = '' } = {}) {
-    const query = String(search).trim();
-    const pattern = `%${query}%`;
-    const where = query ? 'WHERE CAST(height AS TEXT) LIKE ? OR miner LIKE ? OR hash LIKE ?' : '';
-    const params = query ? [pattern, pattern, pattern] : [];
-    
-    const countResult = await client.execute({
-      sql: `SELECT COUNT(*) AS count FROM blocks ${where}`,
-      args: params
-    });
-    const total = Number(countResult.rows[0].count);
-    
-    const rowsResult = await client.execute({
-      sql: `SELECT json FROM blocks ${where} ORDER BY height DESC LIMIT ? OFFSET ?`,
-      args: [...params, limit, offset]
-    });
-    
-    return { blocks: rowsResult.rows.map(row => JSON.parse(row.json)), total };
+    // SQLite LIKE is case-insensitive for ASCII, so the in-memory filter folds
+    // case as well. Ordering and paging semantics match the former SQL query.
+    const query = String(search).trim().toLowerCase();
+    const matched = requireSnapshot().blocks.filter(block =>
+      !query ||
+      String(block.height).includes(query) ||
+      String(block.miner || '').toLowerCase().includes(query) ||
+      String(block.hash || '').toLowerCase().includes(query)
+    );
+    return {
+      blocks: matched.slice().reverse().slice(offset, offset + limit).map(block => ({ ...block })),
+      total: matched.length
+    };
   }
 
-  async function getPeers() {
-    const result = await client.execute("SELECT url, last_seen AS lastSeen, last_error AS lastError FROM peers ORDER BY url");
-    return result.rows.map(row => ({ url: row.url, lastSeen: Number(row.lastSeen), lastError: row.lastError }));
+  async function refreshCachedPeers() {
+    setChainSnapshot({ ...requireSnapshot(), peers: await getPeersFromSql() });
   }
 
   async function addPeer(url) {
@@ -2019,6 +2128,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       sql: "INSERT INTO peers(url) VALUES (?) ON CONFLICT(url) DO NOTHING",
       args: [url]
     });
+    await refreshCachedPeers();
   }
 
   async function updatePeer(url, error = null) {
@@ -2026,6 +2136,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       sql: "UPDATE peers SET last_seen = ?, last_error = ? WHERE url = ?",
       args: [error ? null : Date.now(), error, url]
     });
+    await refreshCachedPeers();
   }
 
   async function removePeer(url) {
@@ -2033,6 +2144,7 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
       sql: "DELETE FROM peers WHERE url = ?",
       args: [url]
     });
+    await refreshCachedPeers();
   }
 
   async function isPeerBanned(identifier) {
@@ -2078,27 +2190,28 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     return { identifier, score, bannedUntil, reason: String(reason).slice(0, 256) };
   }
 
+  // Deep, storage-reading state used by validation consumers and tests. It
+  // deliberately re-reads accounts so an out-of-band SQL writer cannot hide a
+  // tampered balance behind a cached verdict. HTTP read endpoints use the
+  // snapshot-backed cachedNetworkState() below instead.
   async function networkState(address) {
-    const blocks = await getBlocks();
+    const blocks = await getBlocksFromSql();
     const tip = blocks[blocks.length - 1];
     const height = tip.height;
-    const account = address ? await getAccount(address) : { balance_units: 0, nonce: 0 };
-    const supply = await getSupply();
-    
+    const account = address ? await getAccountFromSql(address) : { balance_units: 0, nonce: 0 };
+    const supply = await getSupplyFromSql();
+
     const minedResult = address ? await client.execute({
       sql: "SELECT COUNT(*) AS count FROM blocks WHERE miner = ?",
       args: [address]
     }) : { rows: [{ count: 0 }] };
-    
+
     const pendingResult = await client.execute("SELECT COUNT(*) AS count FROM mempool");
 
-    // State is replayed on every call so a database writer cannot hide a
-    // tampered balance behind a cached verdict. The replay is the same
-    // deterministic validator used for admission and startup.
     const validation = validateChainInternal(blocks, consensus);
     let accountErrors;
     try {
-      const accounts = await readAccounts();
+      const accounts = await readAccountsFromSql();
       accountErrors = compareAccounts(accounts, validation);
     } catch (error) {
       accountErrors = [{ code: 'ACCOUNT_STATE_INVALID', message: error.message }];
@@ -2132,6 +2245,56 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     };
   }
 
+  async function cachedNetworkState(address) {
+    const snapshot = requireSnapshot();
+    const account = address
+      ? snapshot.accounts.get(address) || { balance_units: 0, nonce: 0 }
+      : { balance_units: 0, nonce: 0 };
+    return {
+      height: snapshot.height,
+      supply: snapshot.supply,
+      chainWork: snapshot.chainWork,
+      reward: rewardForHeight(snapshot.height + 1, snapshot.supply),
+      difficulty: expectedDifficulty(snapshot.blocks, snapshot.height + 1, consensus),
+      balance: account.balance_units,
+      nonce: account.nonce,
+      minedBlocks: address ? (snapshot.minedCounts.get(address) || 0) : 0,
+      pendingCount: snapshot.pendingCount,
+      latestBlock: snapshot.tip,
+      accountsValid: snapshot.accountsValid,
+      accountErrors: snapshot.accountErrors,
+      checkpointState: snapshot.checkpointState,
+      checkpointErrors: snapshot.checkpointErrors,
+      checkpoints: snapshot.checkpoints,
+      manifestDigest,
+      checkpointSetDigest,
+      genesisHash: GENESIS_HASH,
+      healthy: snapshot.healthy
+    };
+  }
+
+  /** Cached verdict for fast supervisor health checks; no storage reads. */
+  function cachedValidation() {
+    const snapshot = requireSnapshot();
+    return {
+      valid: snapshot.validation.valid,
+      error: snapshot.validation.error || null,
+      height: snapshot.height,
+      supply: snapshot.supply,
+      chainWork: snapshot.chainWork,
+      accountsValid: snapshot.accountsValid,
+      accountErrors: snapshot.accountErrors,
+      storageValid: true,
+      storageErrors: [],
+      checkpointState: snapshot.checkpointState,
+      checkpointErrors: snapshot.checkpointErrors,
+      checkpoints: snapshot.checkpoints,
+      manifestDigest,
+      checkpointSetDigest,
+      healthy: snapshot.healthy
+    };
+  }
+
   function close() {
     client.close();
   }
@@ -2141,6 +2304,8 @@ export async function createLedger(databasePath = 'blackcoin.db', options = {}, 
     acceptBlock,
     acceptTransaction,
     addPeer,
+    cachedNetworkState,
+    cachedValidation,
     close,
     getBlockRange,
     getBlocks,
