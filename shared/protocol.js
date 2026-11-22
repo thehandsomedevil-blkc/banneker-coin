@@ -60,13 +60,16 @@ export const V2_EMISSION = Object.freeze({
  *
  * Checkpoint 1 at height 731 honours Banneker's birth year, 1731. Checkpoint 2
  * at height 2500 was derived from the live mainnet history under the 5000
- * activation schedule. Both tuples were derived from canonical Era 1 preimages
- * (TE-63); a stored `hash` column is not a trust input. `deriveMainnetCheckpointAnchor`
- * reproduces each tuple from the chain itself.
+ * activation schedule. Checkpoint 3 at height 5000 is the first V2 block and was
+ * derived from the canonical V2 history at that activation height. All tuples
+ * were derived from canonical era-aware preimages (TE-63); a stored `hash`
+ * column is not a trust input. `deriveCheckpoint` reproduces each tuple from
+ * the chain itself.
  *
- * An anchor is only applicable while it sits in Era 1 (height < activation).
- * A node whose activation height is at or below an anchor's height does not
- * inherit that anchor, because the anchor's protocolVersion would then be wrong.
+ * An anchor is applicable only while its protocolVersion matches the era at
+ * that height under the active schedule: Era 1 anchors require height <
+ * activation, and V2 anchors require height >= activation. A node whose
+ * activation height puts an anchor in the wrong era does not inherit it.
  */
 export const MAINNET_CHECKPOINT_ANCHORS = Object.freeze([
   Object.freeze({
@@ -80,6 +83,12 @@ export const MAINNET_CHECKPOINT_ANCHORS = Object.freeze([
     protocolVersion: 1,
     blockHash: '000004f48c5efffd42058140ba6532eeff322a33871a030ce4aefb54bdc38dd7',
     chainWork: '2482285360'
+  }),
+  Object.freeze({
+    height: 5000,
+    protocolVersion: 2,
+    blockHash: '0000008f2dc0478f9d2a9a4799692fb1b1e5055bbd87c9b7d7d75b35408fe886',
+    chainWork: '5168606000'
   })
 ]);
 
@@ -104,10 +113,13 @@ export function targetBlockSecondsForHeight(height, activationHeight = V2_ACTIVA
 }
 
 /**
- * True when a mainnet anchor is an Era 1 fact under this activation schedule
- * and may therefore be enforced by this binary.
+ * True when an anchor uses the era that applies at its height under this
+ * activation schedule and may therefore be enforced by this binary.
  */
 export function appliesToActivation(anchor, activationHeight = V2_ACTIVATION_HEIGHT) {
   if (!Number.isSafeInteger(anchor?.height)) return false;
-  return !isV2Height(anchor.height, activationHeight);
+  const isV2 = isV2Height(anchor.height, activationHeight);
+  if (anchor.protocolVersion === 2) return isV2;
+  if (anchor.protocolVersion === 1) return !isV2;
+  return false;
 }

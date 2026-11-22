@@ -25,10 +25,12 @@ import {
 import {
   COINBASE_MATURITY,
   HALVING_INTERVAL,
+  MAINNET_CHECKPOINT_ANCHORS,
   MAX_SUPPLY_UNITS,
   TARGET_BLOCK_TIME_SECONDS,
   V2_ACTIVATION_HEIGHT,
   V2_EMISSION,
+  appliesToActivation,
   targetBlockSecondsForHeight
 } from '../shared/protocol.js';
 
@@ -75,9 +77,9 @@ test('the halving schedule stays height-only and strictly capped at 21,000,000 B
   assert.equal(rewardForHeight(1, MAX_SUPPLY - 1), 1);
 });
 
-test('compiled Mainnet Checkpoints are enforced by default and excluded from a testnet schedule', async () => {
-  assert.equal(COMPILED_MAINNET_CHECKPOINTS.length, 2);
-  const [first, second] = COMPILED_MAINNET_CHECKPOINTS;
+test('compiled Mainnet Checkpoints are enforced by default and filtered by era', async () => {
+  assert.equal(COMPILED_MAINNET_CHECKPOINTS.length, 3);
+  const [first, second, third] = COMPILED_MAINNET_CHECKPOINTS;
   assert.equal(first.height, 731);
   assert.equal(first.protocolVersion, 1);
   assert.equal(first.blockHash,
@@ -92,6 +94,13 @@ test('compiled Mainnet Checkpoints are enforced by default and excluded from a t
   assert.equal(second.chainWork, '2482285360');
   assert.equal(second.genesisHash, GENESIS_HASH);
 
+  assert.equal(third.height, 5000);
+  assert.equal(third.protocolVersion, 2);
+  assert.equal(third.blockHash,
+    '0000008f2dc0478f9d2a9a4799692fb1b1e5055bbd87c9b7d7d75b35408fe886');
+  assert.equal(third.chainWork, '5168606000');
+  assert.equal(third.genesisHash, GENESIS_HASH);
+
   const mainnet = await createLedger(':memory:');
   const testnet = await createLedger(':memory:', {
     v2ActivationHeight: 2,
@@ -99,7 +108,7 @@ test('compiled Mainnet Checkpoints are enforced by default and excluded from a t
   });
   try {
     const mainnetIdentity = mainnet.getChainIdentity();
-    assert.equal(mainnetIdentity.checkpointCount, 2);
+    assert.equal(mainnetIdentity.checkpointCount, 3);
     assert.equal(mainnetIdentity.v2ActivationHeight, 5000);
     assert.equal(mainnetIdentity.coinbaseMaturity, 53);
     assert.equal(mainnetIdentity.targetBlockSeconds, 60);
@@ -107,17 +116,31 @@ test('compiled Mainnet Checkpoints are enforced by default and excluded from a t
     assert.equal(mainnetState.checkpointState, 'NOT_YET_APPLICABLE');
     assert.equal(mainnetState.checkpoints[0].height, 731);
     assert.equal(mainnetState.checkpoints[1].height, 2500);
+    assert.equal(mainnetState.checkpoints[2].height, 5000);
 
     const testnetIdentity = testnet.getChainIdentity();
-    assert.equal(testnetIdentity.checkpointCount, 0, 'a V2-era anchor would be the wrong era on testnet');
+    assert.equal(testnetIdentity.checkpointCount, 1,
+      'Era 1 anchors are wrong at V2 heights, but the V2 anchor is in the correct era');
     assert.equal(testnetIdentity.v2ActivationHeight, 2);
     assert.equal(testnetIdentity.coinbaseMaturity, 5);
     const testnetState = await testnet.validateStoredChain();
-    assert.equal(testnetState.checkpointState, 'UNCONFIGURED');
+    assert.equal(testnetState.checkpointState, 'NOT_YET_APPLICABLE');
+    assert.equal(testnetState.checkpoints[0].height, 5000);
   } finally {
     mainnet.close();
     testnet.close();
   }
+});
+
+test('checkpoint anchors are filtered by the era at their height', () => {
+  const [era1, , v2] = MAINNET_CHECKPOINT_ANCHORS;
+  assert.equal(appliesToActivation(era1, 5000), true);
+  assert.equal(appliesToActivation(era1, 2), false);
+  assert.equal(appliesToActivation(v2, 5000), true);
+  assert.equal(appliesToActivation(v2, 6000), false);
+  assert.equal(appliesToActivation(v2), true);
+  assert.equal(appliesToActivation({ height: 5000 }, 5000), false,
+    'an anchor without a protocolVersion cannot be assigned to an era');
 });
 
 test('Checkpoint 1 matches a read-only derivation from bannekercoin.db (TE-63)', async (t) => {

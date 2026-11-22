@@ -310,6 +310,6 @@ test('startup verifies compiled checkpoints before rollback or account rebuild',
 });
 
 test('guardrails: compiled anchors and V2 activation height remain unchanged', () => {
-  assert.deepEqual(COMPILED_MAINNET_CHECKPOINTS.map(checkpoint => checkpoint.height), [731, 2500]);
+  assert.deepEqual(COMPILED_MAINNET_CHECKPOINTS.map(checkpoint => checkpoint.height), [731, 2500, 5000]);
   assert.equal(V2_ACTIVATION_HEIGHT, 5000);
 });
